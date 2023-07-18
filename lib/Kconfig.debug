@@ -1,6 +1,24 @@
 # SPDX-License-Identifier: GPL-2.0-only
 menu "Kernel hacking"
 
+menu "HotBPF heap vulnerability fast patch"
+
+config HOTBPF
+	bool "activate HotBPF for kmalloc"
+	depends on BPF && FUNCTION_ERROR_INJECTION && SLUB
+	help
+	  selecting this option activates HotBPF, a feature designed to 
+	  inhibit kernel heap-based exploitation by utilizing eBPF programs. 
+	  It mitigates the risk of overlap between victim and attack payload 
+	  objects by isolating victim objects in a designated slub cache.
+	  Each cache is uniquely distinguished based on its allocation address, 
+	  user privileges, size, and zone.
+
+	  examples are in samples/bpf/
+
+
+endmenu
+
 menu "printk and dmesg options"
 
 config PRINTK_TIME
