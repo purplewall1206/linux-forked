@@ -1017,6 +1017,73 @@ static const struct bpf_func_proto bpf_get_attach_cookie_proto_pe = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+#ifdef CONFIG_HOTBPF
+
+BPF_CALL_3(bpf_create_slub_cache, u32, size, u32, gfp_flags, u64, ip_size_priv_type)
+{
+	slab_flags_t sflags = 0;
+	struct kmem_cache *new_cache;
+	char new_cache_name[64];
+
+	if (gfp_flags & ___GFP_DMA)
+		sflags |= SLAB_CACHE_DMA;
+
+	if (gfp_flags & ___GFP_RECLAIMABLE)
+		sflags |= SLAB_RECLAIM_ACCOUNT;
+
+	if (gfp_flags & ___GFP_ACCOUNT)
+		sflags |= SLAB_ACCOUNT;
+
+	snprintf(new_cache_name, sizeof(new_cache_name), "hotbpf_0x%x_%llx",
+				size, ip_size_priv_type);
+	new_cache = kmem_cache_create(new_cache_name, size, 4096, sflags, NULL);
+
+	return (u64)new_cache;
+}
+
+const struct bpf_func_proto bpf_create_slub_cache_proto = {
+	.func		= bpf_create_slub_cache,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_2(bpf_cache_alloc, u64, cache, u32, gfp_flags)
+{
+	struct kmem_cache *s = (struct kmem_cache *) cache;
+
+	return (u64)kmem_cache_alloc(s, gfp_flags);
+}
+
+const struct bpf_func_proto bpf_cache_alloc_proto = {
+	.func		= bpf_cache_alloc,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_3(bpf_jmp_next, struct pt_regs *, ctx, u64, nextip, u64, ret)
+{
+	ctx->ip = nextip;
+	ctx->ax = ret;
+	return 0;
+}
+
+const struct bpf_func_proto bpf_jmp_next_proto = {
+	.func		= bpf_jmp_next,
+	.gpl_only	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+};
+
+#endif
+
+
 static const struct bpf_func_proto *
 bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -1132,6 +1199,14 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_snprintf_proto;
 	case BPF_FUNC_get_func_ip:
 		return &bpf_get_func_ip_proto_tracing;
+#ifdef CONFIG_HOTBPF
+	case BPF_FUNC_create_slub_cache:
+		return &bpf_create_slub_cache_proto;
+	case BPF_FUNC_cache_alloc:
+		return &bpf_cache_alloc_proto;
+	case BPF_FUNC_jmp_next:
+		return &bpf_jmp_next_proto;
+#endif
 	default:
 		return bpf_base_func_proto(func_id);
 	}
