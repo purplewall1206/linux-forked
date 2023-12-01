@@ -1024,6 +1024,7 @@ BPF_CALL_3(bpf_create_slub_cache, u32, size, u32, gfp_flags, u64, ip_size_priv_t
 	slab_flags_t sflags = 0;
 	struct kmem_cache *new_cache;
 	char new_cache_name[64];
+<<<<<<< HEAD
 
 	if (gfp_flags & ___GFP_DMA)
 		sflags |= SLAB_CACHE_DMA;
@@ -1033,6 +1034,17 @@ BPF_CALL_3(bpf_create_slub_cache, u32, size, u32, gfp_flags, u64, ip_size_priv_t
 
 	if (gfp_flags & ___GFP_ACCOUNT)
 		sflags |= SLAB_ACCOUNT;
+=======
+	if (gfp_flags & ___GFP_DMA) {
+		sflags |= SLAB_CACHE_DMA;
+	}
+	if (gfp_flags & ___GFP_RECLAIMABLE) {
+		sflags |= SLAB_RECLAIM_ACCOUNT;
+	}
+	if (gfp_flags & ___GFP_ACCOUNT) {
+		sflags |= SLAB_ACCOUNT;
+	}
+>>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 
 	snprintf(new_cache_name, sizeof(new_cache_name), "hotbpf_0x%x_%llx",
 				size, ip_size_priv_type);
@@ -1053,7 +1065,10 @@ const struct bpf_func_proto bpf_create_slub_cache_proto = {
 BPF_CALL_2(bpf_cache_alloc, u64, cache, u32, gfp_flags)
 {
 	struct kmem_cache *s = (struct kmem_cache *) cache;
+<<<<<<< HEAD
 
+=======
+>>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 	return (u64)kmem_cache_alloc(s, gfp_flags);
 }
 

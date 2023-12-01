@@ -1,11 +1,3 @@
-<<<<<<< HEAD
-// SPDX-License-Identifier: GPL-2.0
-/*
- * HotBPF example user side
- * Copyright Zicheng Wang, Yueqi Chen
- */
-=======
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 #include <stdio.h>
 #include <unistd.h>
 #include <signal.h>
@@ -14,47 +6,41 @@
 #include <sys/resource.h>
 #include <bpf/libbpf.h>
 #include <fcntl.h>
-<<<<<<< HEAD
-static sig_atomic_t stop;
-=======
+// #include "kmalloc_ret.skel.h"
+
+// static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
+// {
+// 	return vfprintf(stderr, format, args);
+// }
+
 static volatile sig_atomic_t stop;
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 
 static void sig_int(int signo)
 {
 	stop = 1;
 }
 
+
+// cat /sys/kernel/debug/tracing/trace_pipe
 int main(int argc, char **argv)
 {
-<<<<<<< HEAD
-	struct bpf_link *links[2];
-=======
     struct bpf_link *links[2];
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 	struct bpf_program *prog;
 	struct bpf_object *obj;
 	char filename[256];
+	// int map_fd, i, j = 0;
 	int j = 0;
+	// __u64 key, next_key, val;
 	int trace_fd;
-<<<<<<< HEAD
-
-=======
 	
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 	trace_fd = open("/sys/kernel/debug/tracing/trace_pipe", O_RDONLY, 0);
 	if (trace_fd < 0) {
 		printf("cannot open trace_pipe %d\n", trace_fd);
 		return trace_fd;
 	}
 
-<<<<<<< HEAD
-	snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
-
-=======
     snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
 	
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 	obj = bpf_object__open_file(filename, NULL);
 	if (libbpf_get_error(obj)) {
 		fprintf(stderr, "ERROR: opening BPF object file failed\n");
@@ -83,52 +69,35 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-<<<<<<< HEAD
-	printf("Please run `sudo cat /sys/kernel/debug/tracing/trace_pipe` "
-			"to see output of the BPF programs.\n");
-
-
-	printf("start tracing\n");
-	while (!stop) {
-		static char buf[4096];
-		ssize_t sz;
-
-=======
     printf("Please run `sudo cat /sys/kernel/debug/tracing/trace_pipe` "
 	       "to see output of the BPF programs.\n");
 
 	
 	printf("start tracing\n");
     while (!stop) {
+        // fprintf(stderr, ".");
+        // sleep(1);
 		static char buf[4096];
 		ssize_t sz;
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 		sz = read(trace_fd, buf, sizeof(buf) - 1);
 		if (sz > 0) {
 			buf[sz] = '\0';
+			// printf("trace: %s\n", buf);
 			puts(buf);
 		}
-<<<<<<< HEAD
-	}
-
-cleanup:
-	for (j--; j >= 0; j--)
-		bpf_link__destroy(links[j]);
-	bpf_object__close(obj);
-	close(trace_fd);
-
-	return 0;
-}
-=======
     }
 
+
     cleanup:
+        // bpf_link__destroy(link);
 		for (j--; j >= 0; j--)
 			bpf_link__destroy(links[j]);
 	    bpf_object__close(obj);
 		close(trace_fd);
         return 0;
 
+
+
+
     return 0;
 }
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba

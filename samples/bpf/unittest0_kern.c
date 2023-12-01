@@ -1,12 +1,4 @@
-<<<<<<< HEAD
-// SPDX-License-Identifier: GPL-2.0
-/*
- * HotBPF example kernel side
- * Copyright Zicheng Wang, Yueqi Chen
- */
-=======
 
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
@@ -21,25 +13,6 @@
 
 
 struct kmem_cache {
-<<<<<<< HEAD
-	unsigned long cpu_slab;
-	unsigned int flags;
-	unsigned long min_partial;
-	unsigned int size;
-	unsigned int object_size;
-	unsigned long reciprocal_size;
-	unsigned int offset;
-	unsigned int cpu_partial;
-	unsigned int oo;
-	unsigned int max;
-	unsigned int min;
-	unsigned int allocflags;
-	int refcount;
-    /* size: 8408, cachelines: 132, members: 26 */
-    /* sum members: 8392, holes: 4, sum holes: 16 */
-    /* paddings: 1, sum paddings: 2 */
-    /* last cacheline: 24 bytes */
-=======
         unsigned long    cpu_slab;             /*     0     8 */
         unsigned int               flags;                /*     8     4 */
 
@@ -65,56 +38,43 @@ struct kmem_cache {
         /* sum members: 8392, holes: 4, sum holes: 16 */
         /* paddings: 1, sum paddings: 2 */
         /* last cacheline: 24 bytes */
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 };
 
 
 struct {
-<<<<<<< HEAD
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 40960);
-	__type(key, u64);	// ip^size^priv^zone
-	__type(value, u64);	// cache addr
-=======
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 40960);
+    __type(key, u64); // addr
+    __type(value, u64); // index: ip+size+priv+zone
+} addr2key SEC(".maps");
+
+struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 40960);
     __type(key, u64); 	// ip+size+priv+zone
     __type(value, u64); // cache addr
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 } key2cache SEC(".maps");
 
 u64 get_key(u64 ip, u32 size, u32 uid, u32 zone)
 {
-<<<<<<< HEAD
-	return ip ^ (u64) size ^ (u64) uid ^ (u64) zone;
-=======
-	return ip ^ (u64)size ^ (u64)uid ^ (u64)zone ;
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
+	u64 ret = zone << 59;
+	u64 priv = (uid == 0 ? 1 : 0);
+	if (priv == 1)
+		ret = ret | (1 << 62);
+	ret = ret | (size << 31);
+	ret = ret & ip;
+	return ret;
 }
 
 u32 get_size(u32 size)
 {
 	u32 ret = (size + 4096) / 4096;
-<<<<<<< HEAD
-
-=======
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 	return (ret + 1) * 4096;
 }
 
 u32 get_zone(u32 gfp_flags)
 {
 	u32 ret = 0;
-<<<<<<< HEAD
-
-	if (gfp_flags & ___GFP_DMA)
-		ret = 1;
-	else if (gfp_flags & ___GFP_RECLAIMABLE)
-		ret = 2;
-	else if (gfp_flags & ___GFP_ACCOUNT)
-		ret = 3;
-
-=======
 	if (gfp_flags & ___GFP_DMA) {
 		ret = 1;
 	} else if (gfp_flags & ___GFP_RECLAIMABLE) {
@@ -122,65 +82,19 @@ u32 get_zone(u32 gfp_flags)
 	} else if (gfp_flags & ___GFP_ACCOUNT) {
 		ret = 3;
 	}
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 	return ret;
 }
 
 // ffffffff813371a0 <single_open>:
 // ...
-<<<<<<< HEAD
-// ffffffff813371c5:   call   ffffffff812d61b0 <kmem_cache_alloc_trace>
-// ffffffff813371ca:   test   %rax,%rax
-=======
 // ffffffff813371c5:       e8 e6 ef f9 ff          call   ffffffff812d61b0 <kmem_cache_alloc_trace>        ffffffff813371c6: R_X86_64_PLT32        kmem_cache_alloc_trace-0x4
 // ffffffff813371ca:       48 85 c0                test   %rax,%rax
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 
 // void *kmem_cache_alloc_trace(struct kmem_cache *s, gfp_t gfpflags, size_t size)
 // python3 -c 'print(hex(0xffffffff813371c5-0xffffffff813371a0))'
 SEC("kprobe/single_open+0x25")
-int BPF_KPROBE(HANDLE_kmem_cache_alloc_trace)
+int BPF_KPROBE(kmem_cache_alloc_trace)
 {
-<<<<<<< HEAD
-	u64 ip = ctx->ip;
-	u64 *pv;
-	struct kmem_cache *cache = (struct kmem_cache *) ctx->di;
-	u64 alloc_size = BPF_CORE_READ(cache, size);
-	u32 gfp_flags = (u32) ctx->si;
-	u32 uid = bpf_get_current_uid_gid() >> 32;
-	u32 zone = get_zone(gfp_flags);
-	u64 key = get_key(ip, alloc_size, uid, zone);
-	u64 cache_addr = 0;
-	u64 alloc_addr = 0;
-	int err = 0;
-
-    // if there is a slab cache
-	u64 *pcache = bpf_map_lookup_elem(&key2cache, &key);
-
-	if (!pcache) {
-		cache_addr = bpf_create_slub_cache(alloc_size, gfp_flags, key);
-		if (!cache_addr) {
-			bpf_printk("probe create cache failed\n");
-			return -1;
-		}
-		err = bpf_map_update_elem(&key2cache, &key, &cache_addr, BPF_ANY);
-		if (err < 0) {
-			bpf_printk("update key2cache failed: %d\n", err);
-			return err;
-		}
-	}
-
-	// alloc a new object
-	cache_addr = *pcache;
-	alloc_addr = bpf_cache_alloc(cache_addr, gfp_flags);
-	if (alloc_addr == 0) {
-		bpf_printk("probe kmalloc failed\n");
-		return -1;
-	}
-	bpf_printk("===HotBPF isolate single_open %lx===\n", alloc_addr);
-
-	bpf_jmp_next(ctx, ip + 0x4, alloc_addr);
-=======
     u64 ip = ctx->ip;
 	u64 *pv;
 	struct kmem_cache *cache = (struct kmem_cache*) ctx->di;
@@ -196,6 +110,7 @@ int BPF_KPROBE(HANDLE_kmem_cache_alloc_trace)
     
     // if there is a slab cache
     u64 *pcache = bpf_map_lookup_elem(&key2cache, &key);
+    bpf_printk("===key: %016lx  %016lx %016lx===\n", key, alloc_size, ctx->di);
 
     if (!pcache) {
         cache_addr = bpf_create_slub_cache(alloc_size, gfp_flags, key);
@@ -220,9 +135,17 @@ int BPF_KPROBE(HANDLE_kmem_cache_alloc_trace)
     } else {
         bpf_printk("===HotBPF isolate single_open %lx===\n", alloc_addr);
     }
+    // alloc_addr = 0;
+
+    // add new object to inuse map for free.
+    // err = bpf_map_update_elem(&addr2key, &alloc_addr, &key, BPF_ANY);
+    // if (err < 0) {
+    //     bpf_printk("addr2key update failed: %d\n", err);
+    //     return err;
+    // }
+
     
     bpf_jmp_next(ctx, ip + 0x4, alloc_addr);
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 
 	return 0;
 }
@@ -230,66 +153,21 @@ int BPF_KPROBE(HANDLE_kmem_cache_alloc_trace)
 
 // ffffffff81534d70 <bio_kmalloc>:
 // ...
-<<<<<<< HEAD
-// ffffffff81534d9a:   call   ffffffff812d70e0 <__kmalloc>
-// ffffffff81534d9f:   test   %rax,%rax
-=======
 // ffffffff81534d9a:       e8 41 23 da ff          call   ffffffff812d70e0 <__kmalloc>     ffffffff81534d9b: R_X86_64_PLT32        __kmalloc-0x4
 // ffffffff81534d9f:       48 85 c0                test   %rax,%rax
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 
 // void *__kmalloc(size_t size, gfp_t flags)
 // python3 -c 'print(hex(0xffffffff81534d9a-0xffffffff81534d70))'
 SEC("kprobe/bio_kmalloc+0x2a")
-int BPF_KPROBE(HANDLE___kmalloc)
+int BPF_KPROBE(__kmalloc)
 {
-<<<<<<< HEAD
-	u64 ip = ctx->ip;
-	u64 *pv;
-	u64 alloc_size = get_size(ctx->di);
-	u32 gfp_flags = (u32) ctx->si;
-	u32 uid = bpf_get_current_uid_gid() >> 32;
-	u32 zone = get_zone(gfp_flags);
-	u64 key = get_key(ip, alloc_size, uid, zone);
-	u64 cache_addr = 0;
-	u64 alloc_addr = 0;
-	int err = 0;
-
-	// if there is a slab cache
-	u64 *pcache = bpf_map_lookup_elem(&key2cache, &key);
-
-	if (!pcache) {
-		cache_addr = bpf_create_slub_cache(alloc_size, gfp_flags, key);
-		if (!cache_addr) {
-			bpf_printk("probe create cache failed\n");
-			return -1;
-		}
-		err = bpf_map_update_elem(&key2cache, &key, &cache_addr, BPF_ANY);
-		if (err < 0) {
-			bpf_printk("update key2cache failed: %d\n", err);
-			return err;
-		}
-	} else {
-		cache_addr = *pcache;
-	}
-
-	// alloc a new object
-	alloc_addr = bpf_cache_alloc(cache_addr, gfp_flags);
-	if (alloc_addr == 0) {
-		bpf_printk("probe kmalloc failed\n");
-		return -1;
-	}
-	bpf_printk("===HotBPF isolate bio_kmalloc %lx===\n", alloc_addr);
-
-	bpf_jmp_next(ctx, ip + 0x4, alloc_addr);
-=======
     u64 ip = ctx->ip;
 	u64 *pv;
     u64 alloc_size = get_size(ctx->di);
 	u32 gfp_flags = (u32) ctx->si;
 	u32 uid = bpf_get_current_uid_gid() >> 32;
 	u32 zone = get_zone(gfp_flags);
-    u64 key = get_key(ip, alloc_size, uid, zone);
+    u64 key = get_key(ip, alloc_size, uid, zone);;
 	u64 cache_addr = 0;
     u64 alloc_addr = 0;
 	int err = 0; 
@@ -297,6 +175,7 @@ int BPF_KPROBE(HANDLE___kmalloc)
     
     // if there is a slab cache
     u64 *pcache = bpf_map_lookup_elem(&key2cache, &key);
+    bpf_printk("===key: %016lx  %016lx %016lx===\n", key, alloc_size, ctx->di);
 
     if (!pcache) {
         cache_addr = bpf_create_slub_cache(alloc_size, gfp_flags, key);
@@ -321,17 +200,42 @@ int BPF_KPROBE(HANDLE___kmalloc)
     } else {
         bpf_printk("===HotBPF isolate bio_kmalloc %lx===\n", alloc_addr);
     }
+
+    // add new object to inuse map for free.
+    // err = bpf_map_update_elem(&addr2key, &alloc_addr, &key, BPF_ANY);
+    // if (err < 0) {
+    //     bpf_printk("addr2key update failed: %d\n", err);
+    //     return err;
+    // }
+
     
     bpf_jmp_next(ctx, ip + 0x4, alloc_addr);
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 
 	return 0;
 }
 
 
 
-char LICENSE[] SEC("license") = "Dual BSD/GPL";
-<<<<<<< HEAD
-=======
 
->>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
+// ffffffff813374c0 <single_release>:
+// ...
+// ffffffff813374ee:       e8 cd bf f9 ff          call   ffffffff812d34c0 <kfree> ffffffff813374ef: R_X86_64_PLT32        kfree-0x4
+// ffffffff813374f3:       31 c0                   xor    %eax,%eax
+
+// SEC("kprobe/single_release")
+// int BPF_KPROBE(kfree)
+// {
+//     u64 *pkey = bpf_map_lookup_elem(&addr2key, &alloc_addr);
+// 	if (pkey) {
+// 		err = bpf_map_delete_elem(&addr2key, &alloc_addr);
+// 		if (err < 0) {
+// 			bpf_printk("kfree addr2key delete failed: %d\n", err);
+// 			return err;
+// 		}
+//     }
+//     return 0;
+// }
+
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
+

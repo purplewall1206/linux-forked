@@ -4877,6 +4877,25 @@ union bpf_attr {
  *		Get the struct pt_regs associated with **task**.
  *	Return
  *		A pointer to struct pt_regs.
+ *
+ * long bpf_create_slub_cache(u32 size, u32 gfp_flags, u64 ip_size_priv_type)
+ *	Description
+ *		Create a new slab cache according to the ip/size/privilege/zone
+ *	Return
+ *		The cache's address or NULL.
+ *
+ * long bpf_cache_alloc(u64 cache, u32 gfp_flags)
+ *	Description
+ *		allocate memory objects from the slab cache
+ *	Return
+ *		The allocated memory or NULL.
+ *
+ * long bpf_jmp_next(struct pt_regs *ctx, u64 nextip, u64 ret)
+ *	Description
+ *		jump the `call kmalloc`'s next instruction, and set rax.
+ *	Return 
+ *		0.
+ *
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -5055,6 +5074,9 @@ union bpf_attr {
 	FN(get_func_ip),		\
 	FN(get_attach_cookie),		\
 	FN(task_pt_regs),		\
+	FN(create_slub_cache),		\
+	FN(cache_alloc),		\
+	FN(jmp_next),			\
 	/* */
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper

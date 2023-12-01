@@ -4,7 +4,7 @@ BPF_SAMPLES_PATH ?= $(abspath $(srctree)/$(src))
 TOOLS_PATH := $(BPF_SAMPLES_PATH)/../../tools
 
 # List of programs to build
-tprogs-y := test_lru_dist
+# tprogs-y := test_lru_dist
 tprogs-y += sock_example
 tprogs-y += fds_example
 tprogs-y += sockex1
@@ -14,7 +14,7 @@ tprogs-y += tracex1
 tprogs-y += tracex2
 tprogs-y += tracex3
 tprogs-y += tracex4
-tprogs-y += tracex5
+# tprogs-y += tracex5
 tprogs-y += tracex6
 tprogs-y += tracex7
 tprogs-y += test_probe_write_user
@@ -43,9 +43,9 @@ tprogs-y += xdp_rxq_info
 tprogs-y += syscall_tp
 tprogs-y += cpustat
 tprogs-y += xdp_adjust_tail
-tprogs-y += xdpsock
-tprogs-y += xdpsock_ctrl_proc
-tprogs-y += xsk_fwd
+# tprogs-y += xdpsock
+# tprogs-y += xdpsock_ctrl_proc
+# tprogs-y += xsk_fwd
 tprogs-y += xdp_fwd
 tprogs-y += task_fd_query
 tprogs-y += xdp_sample_pkts
@@ -57,6 +57,8 @@ tprogs-y += xdp_redirect_map_multi
 tprogs-y += xdp_redirect_map
 tprogs-y += xdp_redirect
 tprogs-y += xdp_monitor
+tprogs-y += unittest0
+tprogs-y += hotbpf_example
 
 # Libbpf dependencies
 LIBBPF = $(TOOLS_PATH)/lib/bpf/libbpf.a
@@ -73,7 +75,7 @@ tracex1-objs := tracex1_user.o $(TRACE_HELPERS)
 tracex2-objs := tracex2_user.o
 tracex3-objs := tracex3_user.o
 tracex4-objs := tracex4_user.o
-tracex5-objs := tracex5_user.o $(TRACE_HELPERS)
+# tracex5-objs := tracex5_user.o $(TRACE_HELPERS)
 tracex6-objs := tracex6_user.o
 tracex7-objs := tracex7_user.o
 test_probe_write_user-objs := test_probe_write_user_user.o
@@ -104,9 +106,9 @@ xdp_rxq_info-objs := xdp_rxq_info_user.o
 syscall_tp-objs := syscall_tp_user.o
 cpustat-objs := cpustat_user.o
 xdp_adjust_tail-objs := xdp_adjust_tail_user.o
-xdpsock-objs := xdpsock_user.o
-xdpsock_ctrl_proc-objs := xdpsock_ctrl_proc.o
-xsk_fwd-objs := xsk_fwd.o
+# xdpsock-objs := xdpsock_user.o
+# xdpsock_ctrl_proc-objs := xdpsock_ctrl_proc.o
+# xsk_fwd-objs := xsk_fwd.o
 xdp_fwd-objs := xdp_fwd_user.o
 task_fd_query-objs := task_fd_query_user.o $(TRACE_HELPERS)
 xdp_sample_pkts-objs := xdp_sample_pkts_user.o
@@ -118,6 +120,8 @@ xdp_redirect_cpu-objs := xdp_redirect_cpu_user.o $(XDP_SAMPLE)
 xdp_redirect_map-objs := xdp_redirect_map_user.o $(XDP_SAMPLE)
 xdp_redirect-objs := xdp_redirect_user.o $(XDP_SAMPLE)
 xdp_monitor-objs := xdp_monitor_user.o $(XDP_SAMPLE)
+unittest0-objs := unittest0_user.o
+hotbpf_example-objs := hotbpf_example_user.o
 
 # Tell kbuild to always build the programs
 always-y := $(tprogs-y)
@@ -128,7 +132,7 @@ always-y += tracex1_kern.o
 always-y += tracex2_kern.o
 always-y += tracex3_kern.o
 always-y += tracex4_kern.o
-always-y += tracex5_kern.o
+# always-y += tracex5_kern.o
 always-y += tracex6_kern.o
 always-y += tracex7_kern.o
 always-y += sock_flags_kern.o
@@ -174,7 +178,9 @@ always-y += xdp_sample_pkts_kern.o
 always-y += ibumad_kern.o
 always-y += hbm_out_kern.o
 always-y += hbm_edt_kern.o
-always-y += xdpsock_kern.o
+# always-y += xdpsock_kern.o
+always-y += unittest0_kern.o
+always-y += hotbpf_example_kern.o
 
 ifeq ($(ARCH), arm)
 # Strip all except -D__LINUX_ARM_ARCH__ option needed to handle linux
@@ -213,7 +219,7 @@ TPROGLDLIBS_tracex4		+= -lrt
 TPROGLDLIBS_trace_output	+= -lrt
 TPROGLDLIBS_map_perf_test	+= -lrt
 TPROGLDLIBS_test_overhead	+= -lrt
-TPROGLDLIBS_xdpsock		+= -pthread -lcap
+# TPROGLDLIBS_xdpsock		+= -pthread -lcap
 TPROGLDLIBS_xsk_fwd		+= -pthread
 
 # Allows pointing LLC/CLANG to a LLVM backend with bpf support, redefine on cmdline:
@@ -315,7 +321,7 @@ $(obj)/xdp_redirect_map_user.o: $(obj)/xdp_redirect_map.skel.h
 $(obj)/xdp_redirect_user.o: $(obj)/xdp_redirect.skel.h
 $(obj)/xdp_monitor_user.o: $(obj)/xdp_monitor.skel.h
 
-$(obj)/tracex5_kern.o: $(obj)/syscall_nrs.h
+# $(obj)/tracex5_kern.o: $(obj)/syscall_nrs.h
 $(obj)/hbm_out_kern.o: $(src)/hbm.h $(src)/hbm_kern.h
 $(obj)/hbm.o: $(src)/hbm.h
 $(obj)/hbm_edt_kern.o: $(src)/hbm.h $(src)/hbm_kern.h

@@ -4893,7 +4893,11 @@ union bpf_attr {
  * long bpf_jmp_next(struct pt_regs *ctx, u64 nextip, u64 ret)
  *	Description
  *		jump the `call kmalloc`'s next instruction, and set rax.
+<<<<<<< HEAD
  *	Return
+=======
+ *	Return 
+>>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
  *		0.
  *
  */

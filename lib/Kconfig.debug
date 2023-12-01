@@ -7,6 +7,7 @@ config HOTBPF
 	bool "activate HotBPF for kmalloc"
 	depends on BPF && FUNCTION_ERROR_INJECTION && SLUB
 	help
+<<<<<<< HEAD
 	  selecting this option activates HotBPF, a feature designed to
 	  inhibit kernel heap-based exploitation by utilizing eBPF programs.
 	  It mitigates the risk of overlap between victim and attack payload
@@ -15,6 +16,16 @@ config HOTBPF
 	  user privileges, size, and zone.
 
 	  examples are in samples/bpf/hotbpf_example
+=======
+	  selecting this option activates HotBPF, a feature designed to 
+	  inhibit kernel heap-based exploitation by utilizing eBPF programs. 
+	  It mitigates the risk of overlap between victim and attack payload 
+	  objects by isolating victim objects in a designated slub cache.
+	  Each cache is uniquely distinguished based on its allocation address, 
+	  user privileges, size, and zone.
+
+	  examples are in samples/bpf/
+>>>>>>> 08adc6a14e68059cd5f106bb8034fa3434d8d5ba
 
 
 endmenu
