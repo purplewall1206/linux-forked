@@ -108,7 +108,7 @@ struct bcm_sf2_priv {
 	/* Master and slave MDIO bus controller */
 	unsigned int			indir_phy_mask;
 	struct device_node		*master_mii_dn;
-	struct mii_bus			*slave_mii_bus;
+	struct mii_bus			*user_mii_bus;
 	struct mii_bus			*master_mii_bus;
 
 	/* Bitmask of ports needing BRCM tags */
@@ -209,6 +209,16 @@ SF2_IO_MACRO(acb);
 
 SWITCH_INTR_L2(0);
 SWITCH_INTR_L2(1);
+
+static inline u32 reg_led_readl(struct bcm_sf2_priv *priv, u16 off, u16 reg)
+{
+	return readl_relaxed(priv->reg + priv->reg_offsets[off] + reg);
+}
+
+static inline void reg_led_writel(struct bcm_sf2_priv *priv, u32 val, u16 off, u16 reg)
+{
+	writel_relaxed(val, priv->reg + priv->reg_offsets[off] + reg);
+}
 
 /* RXNFC */
 int bcm_sf2_get_rxnfc(struct dsa_switch *ds, int port,

@@ -14,6 +14,7 @@ obj-$(CONFIG_WIREGUARD) += wireguard/
 obj-$(CONFIG_EQUALIZER) += eql.o
 obj-$(CONFIG_IFB) += ifb.o
 obj-$(CONFIG_MACSEC) += macsec.o
+obj-$(CONFIG_AMT) += amt.o
 obj-$(CONFIG_MACVLAN) += macvlan.o
 obj-$(CONFIG_MACVTAP) += macvtap.o
 obj-$(CONFIG_MII) += mii.o
@@ -21,7 +22,9 @@ obj-$(CONFIG_MDIO) += mdio.o
 obj-$(CONFIG_NET) += loopback.o
 obj-$(CONFIG_NETDEV_LEGACY_INIT) += Space.o
 obj-$(CONFIG_NETCONSOLE) += netconsole.o
+obj-$(CONFIG_NETKIT) += netkit.o
 obj-y += phy/
+obj-y += pse-pd/
 obj-y += mdio/
 obj-y += pcs/
 obj-$(CONFIG_RIONET) += rionet.o
@@ -30,7 +33,7 @@ obj-$(CONFIG_TUN) += tun.o
 obj-$(CONFIG_TAP) += tap.o
 obj-$(CONFIG_VETH) += veth.o
 obj-$(CONFIG_VIRTIO_NET) += virtio_net.o
-obj-$(CONFIG_VXLAN) += vxlan.o
+obj-$(CONFIG_VXLAN) += vxlan/
 obj-$(CONFIG_GENEVE) += geneve.o
 obj-$(CONFIG_BAREUDP) += bareudp.o
 obj-$(CONFIG_GTP) += gtp.o
@@ -43,7 +46,6 @@ obj-$(CONFIG_MHI_NET) += mhi_net.o
 # Networking Drivers
 #
 obj-$(CONFIG_ARCNET) += arcnet/
-obj-$(CONFIG_DEV_APPLETALK) += appletalk/
 obj-$(CONFIG_CAIF) += caif/
 obj-$(CONFIG_CAN) += can/
 obj-$(CONFIG_NET_DSA) += dsa/
@@ -82,8 +84,6 @@ obj-$(CONFIG_HYPERV_NET) += hyperv/
 obj-$(CONFIG_NTB_NETDEV) += ntb_netdev.o
 
 obj-$(CONFIG_FUJITSU_ES) += fjes/
-
-thunderbolt-net-y += thunderbolt.o
-obj-$(CONFIG_USB4_NET) += thunderbolt-net.o
+obj-$(CONFIG_USB4_NET) += thunderbolt/
 obj-$(CONFIG_NETDEVSIM) += netdevsim/
 obj-$(CONFIG_NET_FAILOVER) += net_failover.o

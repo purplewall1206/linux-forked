@@ -24,8 +24,6 @@
  *
  */
 
-#include <linux/slab.h>
-
 #include "dm_services.h"
 
 
@@ -37,7 +35,7 @@
 #include "dce112/dce112_resource.h"
 
 #include "dce110/dce110_resource.h"
-#include "../virtual/virtual_stream_encoder.h"
+#include "virtual/virtual_stream_encoder.h"
 #include "dce120_timing_generator.h"
 #include "irq/dce120/irq_service_dce120.h"
 #include "dce/dce_opp.h"
@@ -46,8 +44,8 @@
 #include "dce/dce_mem_input.h"
 #include "dce/dce_panel_cntl.h"
 
-#include "dce110/dce110_hw_sequencer.h"
-#include "dce120/dce120_hw_sequencer.h"
+#include "dce110/dce110_hwseq.h"
+#include "dce120/dce120_hwseq.h"
 #include "dce/dce_transform.h"
 #include "clk_mgr.h"
 #include "dce/dce_audio.h"
@@ -361,7 +359,8 @@ static const struct dce_audio_registers audio_regs[] = {
 	audio_regs(2),
 	audio_regs(3),
 	audio_regs(4),
-	audio_regs(5)
+	audio_regs(5),
+	audio_regs(6),
 };
 
 #define DCE120_AUD_COMMON_MASK_SH_LIST(mask_sh)\
@@ -527,6 +526,7 @@ static const struct dc_plane_cap plane_cap = {
 
 static const struct dc_debug_options debug_defaults = {
 		.disable_clock_gate = true,
+		.enable_legacy_fast_update = true,
 };
 
 static struct clock_source *dce120_clock_source_create(
@@ -699,6 +699,7 @@ static const struct encoder_feature_support link_enc_feature = {
 };
 
 static struct link_encoder *dce120_link_encoder_create(
+	struct dc_context *ctx,
 	const struct encoder_init_data *enc_init_data)
 {
 	struct dce110_link_encoder *enc110 =

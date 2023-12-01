@@ -2,8 +2,7 @@
 /*
  * Copyright IBM Corp. 2007,2012
  *
- * Author(s): Heiko Carstens <heiko.carstens@de.ibm.com>,
- *	      Peter Oberparleiter <peter.oberparleiter@de.ibm.com>
+ * Author(s): Peter Oberparleiter <peter.oberparleiter@de.ibm.com>
  */
 
 #define KMSG_COMPONENT "sclp_cmd"
@@ -20,7 +19,7 @@
 #include <linux/mmzone.h>
 #include <linux/memory.h>
 #include <linux/module.h>
-#include <asm/ctl_reg.h>
+#include <asm/ctlreg.h>
 #include <asm/chpid.h>
 #include <asm/setup.h>
 #include <asm/page.h>
@@ -242,7 +241,7 @@ struct attach_storage_sccb {
 	u16 :16;
 	u16 assigned;
 	u32 :32;
-	u32 entries[0];
+	u32 entries[];
 } __packed;
 
 static int sclp_attach_storage(u8 id)
@@ -354,7 +353,6 @@ static int sclp_mem_notifier(struct notifier_block *nb,
 		sclp_mem_change_state(start, size, 0);
 		break;
 	default:
-		rc = -EINVAL;
 		break;
 	}
 	mutex_unlock(&sclp_mem_mutex);
@@ -393,10 +391,6 @@ static void __init add_memory_merged(u16 rn)
 		goto skip_add;
 	start = rn2addr(first_rn);
 	size = (unsigned long long) num * sclp.rzm;
-	if (start >= VMEM_MAX_PHYS)
-		goto skip_add;
-	if (start + size > VMEM_MAX_PHYS)
-		size = VMEM_MAX_PHYS - start;
 	if (start >= ident_map_size)
 		goto skip_add;
 	if (start + size > ident_map_size)

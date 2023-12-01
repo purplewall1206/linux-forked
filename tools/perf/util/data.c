@@ -3,6 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/zalloc.h>
+#include <linux/err.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <errno.h>
@@ -16,6 +17,7 @@
 #include "util.h" // rm_rf_perf_data()
 #include "debug.h"
 #include "header.h"
+#include "rlimit.h"
 #include <internal/lib.h>
 
 static void close_dir(struct perf_data_file *files, int nr)
@@ -34,6 +36,7 @@ void perf_data__close_dir(struct perf_data *data)
 
 int perf_data__create_dir(struct perf_data *data, int nr)
 {
+	enum rlimit_action set_rlimit = NO_CHANGE;
 	struct perf_data_file *files = NULL;
 	int i, ret;
 
@@ -44,24 +47,37 @@ int perf_data__create_dir(struct perf_data *data, int nr)
 	if (!files)
 		return -ENOMEM;
 
-	data->dir.version = PERF_DIR_VERSION;
-	data->dir.files   = files;
-	data->dir.nr      = nr;
-
 	for (i = 0; i < nr; i++) {
 		struct perf_data_file *file = &files[i];
 
 		ret = asprintf(&file->path, "%s/data.%d", data->path, i);
-		if (ret < 0)
+		if (ret < 0) {
+			ret = -ENOMEM;
 			goto out_err;
+		}
 
+retry_open:
 		ret = open(file->path, O_RDWR|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR);
-		if (ret < 0)
+		if (ret < 0) {
+			/*
+			 * If using parallel threads to collect data,
+			 * perf record needs at least 6 fds per CPU.
+			 * When we run out of them try to increase the limits.
+			 */
+			if (errno == EMFILE && rlimit__increase_nofile(&set_rlimit))
+				goto retry_open;
+
+			ret = -errno;
 			goto out_err;
+		}
+		set_rlimit = NO_CHANGE;
 
 		file->fd = ret;
 	}
 
+	data->dir.version = PERF_DIR_VERSION;
+	data->dir.files   = files;
+	data->dir.nr      = nr;
 	return 0;
 
 out_err:
@@ -128,6 +144,7 @@ int perf_data__open_dir(struct perf_data *data)
 		file->size = st.st_size;
 	}
 
+	closedir(dir);
 	if (!files)
 		return -EINVAL;
 
@@ -136,6 +153,7 @@ int perf_data__open_dir(struct perf_data *data)
 	return 0;
 
 out_err:
+	closedir(dir);
 	close_dir(files, nr);
 	return ret;
 }
@@ -476,6 +494,25 @@ int perf_data__make_kcore_dir(struct perf_data *data, char *buf, size_t buf_sz)
 	return mkdir(buf, S_IRWXU);
 }
 
+bool has_kcore_dir(const char *path)
+{
+	struct dirent *d = ERR_PTR(-EINVAL);
+	const char *name = "kcore_dir";
+	DIR *dir = opendir(path);
+	size_t n = strlen(name);
+	bool result = false;
+
+	if (dir) {
+		while (d && !result) {
+			d = readdir(dir);
+			result = d ? strncmp(d->d_name, name, n) : false;
+		}
+		closedir(dir);
+	}
+
+	return result;
+}
+
 char *perf_data__kallsyms_name(struct perf_data *data)
 {
 	char *kallsyms_name;
@@ -485,6 +522,25 @@ char *perf_data__kallsyms_name(struct perf_data *data)
 		return NULL;
 
 	if (asprintf(&kallsyms_name, "%s/kcore_dir/kallsyms", data->path) < 0)
+		return NULL;
+
+	if (stat(kallsyms_name, &st)) {
+		free(kallsyms_name);
+		return NULL;
+	}
+
+	return kallsyms_name;
+}
+
+char *perf_data__guest_kallsyms_name(struct perf_data *data, pid_t machine_pid)
+{
+	char *kallsyms_name;
+	struct stat st;
+
+	if (!data->is_dir)
+		return NULL;
+
+	if (asprintf(&kallsyms_name, "%s/kcore_dir__%d/kallsyms", data->path, machine_pid) < 0)
 		return NULL;
 
 	if (stat(kallsyms_name, &st)) {

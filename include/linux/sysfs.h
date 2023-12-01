@@ -181,6 +181,8 @@ struct bin_attribute {
 			char *, loff_t, size_t);
 	ssize_t (*write)(struct file *, struct kobject *, struct bin_attribute *,
 			 char *, loff_t, size_t);
+	loff_t (*llseek)(struct file *, struct kobject *, struct bin_attribute *,
+			 loff_t, int);
 	int (*mmap)(struct file *, struct kobject *, struct bin_attribute *attr,
 		    struct vm_area_struct *vma);
 };
@@ -234,6 +236,22 @@ struct bin_attribute bin_attr_##_name = __BIN_ATTR_WO(_name, _size)
 
 #define BIN_ATTR_RW(_name, _size)					\
 struct bin_attribute bin_attr_##_name = __BIN_ATTR_RW(_name, _size)
+
+
+#define __BIN_ATTR_ADMIN_RO(_name, _size) {					\
+	.attr	= { .name = __stringify(_name), .mode = 0400 },		\
+	.read	= _name##_read,						\
+	.size	= _size,						\
+}
+
+#define __BIN_ATTR_ADMIN_RW(_name, _size)					\
+	__BIN_ATTR(_name, 0600, _name##_read, _name##_write, _size)
+
+#define BIN_ATTR_ADMIN_RO(_name, _size)					\
+struct bin_attribute bin_attr_##_name = __BIN_ATTR_ADMIN_RO(_name, _size)
+
+#define BIN_ATTR_ADMIN_RW(_name, _size)					\
+struct bin_attribute bin_attr_##_name = __BIN_ATTR_ADMIN_RW(_name, _size)
 
 struct sysfs_ops {
 	ssize_t	(*show)(struct kobject *, struct attribute *, char *);

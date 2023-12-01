@@ -16,6 +16,9 @@
 #ifndef __PINCTRL_SAMSUNG_EXYNOS_H
 #define __PINCTRL_SAMSUNG_EXYNOS_H
 
+/* Values for the pin CON register */
+#define EXYNOS_PIN_CON_FUNC_EINT	0xf
+
 /* External GPIO and wakeup interrupt related definitions */
 #define EXYNOS_GPIO_ECON_OFFSET		0x700
 #define EXYNOS_GPIO_EFLTCON_OFFSET	0x800
@@ -156,7 +159,7 @@ struct exynos_weint_data {
  */
 struct exynos_muxed_weint_data {
 	unsigned int nr_banks;
-	struct samsung_pin_bank *banks[];
+	struct samsung_pin_bank *banks[] __counted_by(nr_banks);
 };
 
 int exynos_eint_gpio_init(struct samsung_pinctrl_drv_data *d);

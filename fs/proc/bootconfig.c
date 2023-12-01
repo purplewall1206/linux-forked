@@ -32,6 +32,8 @@ static int __init copy_xbc_key_value_list(char *dst, size_t size)
 	int ret = 0;
 
 	key = kzalloc(XBC_KEYLEN_MAX, GFP_KERNEL);
+	if (!key)
+		return -ENOMEM;
 
 	xbc_for_each_key_value(leaf, val) {
 		ret = xbc_node_compose_key(leaf, key, XBC_KEYLEN_MAX);
@@ -59,6 +61,12 @@ static int __init copy_xbc_key_value_list(char *dst, size_t size)
 			if (ret < 0)
 				break;
 			dst += ret;
+		}
+		if (ret >= 0 && boot_command_line[0]) {
+			ret = snprintf(dst, rest(dst, end), "# Parameters from bootloader:\n# %s\n",
+				       boot_command_line);
+			if (ret > 0)
+				dst += ret;
 		}
 	}
 out:

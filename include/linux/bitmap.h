@@ -6,9 +6,12 @@
 
 #include <linux/align.h>
 #include <linux/bitops.h>
+#include <linux/errno.h>
+#include <linux/find.h>
 #include <linux/limits.h>
 #include <linux/string.h>
 #include <linux/types.h>
+#include <linux/bitmap-str.h>
 
 struct device;
 
@@ -50,16 +53,11 @@ struct device;
  *  bitmap_empty(src, nbits)                    Are all bits zero in *src?
  *  bitmap_full(src, nbits)                     Are all bits set in *src?
  *  bitmap_weight(src, nbits)                   Hamming Weight: number set bits
+ *  bitmap_weight_and(src1, src2, nbits)        Hamming Weight of and'ed bitmap
  *  bitmap_set(dst, pos, nbits)                 Set specified bit area
  *  bitmap_clear(dst, pos, nbits)               Clear specified bit area
  *  bitmap_find_next_zero_area(buf, len, pos, n, mask)  Find bit free area
  *  bitmap_find_next_zero_area_off(buf, len, pos, n, mask, mask_off)  as above
- *  bitmap_next_clear_region(map, &start, &end, nbits)  Find next clear region
- *  bitmap_next_set_region(map, &start, &end, nbits)  Find next set region
- *  bitmap_for_each_clear_region(map, rs, re, start, end)
- *  						Iterate over all clear regions
- *  bitmap_for_each_set_region(map, rs, re, start, end)
- *  						Iterate over all set regions
  *  bitmap_shift_right(dst, src, n, nbits)      *dst = *src >> n
  *  bitmap_shift_left(dst, src, n, nbits)       *dst = *src << n
  *  bitmap_cut(dst, src, first, n, nbits)       Cut n bits from first, copy rest
@@ -76,7 +74,9 @@ struct device;
  *  bitmap_release_region(bitmap, pos, order)   Free specified bit region
  *  bitmap_allocate_region(bitmap, pos, order)  Allocate specified bit region
  *  bitmap_from_arr32(dst, buf, nbits)          Copy nbits from u32[] buf to dst
+ *  bitmap_from_arr64(dst, buf, nbits)          Copy nbits from u64[] buf to dst
  *  bitmap_to_arr32(buf, src, nbits)            Copy nbits from buf to u32[] dst
+ *  bitmap_to_arr64(buf, src, nbits)            Copy nbits from buf to u64[] dst
  *  bitmap_get_value8(map, start)               Get 8bit value from map at start
  *  bitmap_set_value8(map, value, start)        Set 8bit value to map at start
  *
@@ -123,6 +123,8 @@ struct device;
  */
 unsigned long *bitmap_alloc(unsigned int nbits, gfp_t flags);
 unsigned long *bitmap_zalloc(unsigned int nbits, gfp_t flags);
+unsigned long *bitmap_alloc_node(unsigned int nbits, gfp_t flags, int node);
+unsigned long *bitmap_zalloc_node(unsigned int nbits, gfp_t flags, int node);
 void bitmap_free(const unsigned long *bitmap);
 
 /* Managed variants of the above. */
@@ -135,8 +137,8 @@ unsigned long *devm_bitmap_zalloc(struct device *dev,
  * lib/bitmap.c provides these functions:
  */
 
-int __bitmap_equal(const unsigned long *bitmap1,
-		   const unsigned long *bitmap2, unsigned int nbits);
+bool __bitmap_equal(const unsigned long *bitmap1,
+		    const unsigned long *bitmap2, unsigned int nbits);
 bool __pure __bitmap_or_equal(const unsigned long *src1,
 			      const unsigned long *src2,
 			      const unsigned long *src3,
@@ -149,22 +151,24 @@ void __bitmap_shift_left(unsigned long *dst, const unsigned long *src,
 			 unsigned int shift, unsigned int nbits);
 void bitmap_cut(unsigned long *dst, const unsigned long *src,
 		unsigned int first, unsigned int cut, unsigned int nbits);
-int __bitmap_and(unsigned long *dst, const unsigned long *bitmap1,
+bool __bitmap_and(unsigned long *dst, const unsigned long *bitmap1,
 		 const unsigned long *bitmap2, unsigned int nbits);
 void __bitmap_or(unsigned long *dst, const unsigned long *bitmap1,
 		 const unsigned long *bitmap2, unsigned int nbits);
 void __bitmap_xor(unsigned long *dst, const unsigned long *bitmap1,
 		  const unsigned long *bitmap2, unsigned int nbits);
-int __bitmap_andnot(unsigned long *dst, const unsigned long *bitmap1,
+bool __bitmap_andnot(unsigned long *dst, const unsigned long *bitmap1,
 		    const unsigned long *bitmap2, unsigned int nbits);
 void __bitmap_replace(unsigned long *dst,
 		      const unsigned long *old, const unsigned long *new,
 		      const unsigned long *mask, unsigned int nbits);
-int __bitmap_intersects(const unsigned long *bitmap1,
-			const unsigned long *bitmap2, unsigned int nbits);
-int __bitmap_subset(const unsigned long *bitmap1,
-		    const unsigned long *bitmap2, unsigned int nbits);
-int __bitmap_weight(const unsigned long *bitmap, unsigned int nbits);
+bool __bitmap_intersects(const unsigned long *bitmap1,
+			 const unsigned long *bitmap2, unsigned int nbits);
+bool __bitmap_subset(const unsigned long *bitmap1,
+		     const unsigned long *bitmap2, unsigned int nbits);
+unsigned int __bitmap_weight(const unsigned long *bitmap, unsigned int nbits);
+unsigned int __bitmap_weight_and(const unsigned long *bitmap1,
+				 const unsigned long *bitmap2, unsigned int nbits);
 void __bitmap_set(unsigned long *map, unsigned int start, int len);
 void __bitmap_clear(unsigned long *map, unsigned int start, int len);
 
@@ -198,14 +202,6 @@ bitmap_find_next_zero_area(unsigned long *map,
 					      align_mask, 0);
 }
 
-int bitmap_parse(const char *buf, unsigned int buflen,
-			unsigned long *dst, int nbits);
-int bitmap_parse_user(const char __user *ubuf, unsigned int ulen,
-			unsigned long *dst, int nbits);
-int bitmap_parselist(const char *buf, unsigned long *maskp,
-			int nmaskbits);
-int bitmap_parselist_user(const char __user *ubuf, unsigned int ulen,
-			unsigned long *dst, int nbits);
 void bitmap_remap(unsigned long *dst, const unsigned long *src,
 		const unsigned long *old, const unsigned long *new, unsigned int nbits);
 int bitmap_bitremap(int oldbit,
@@ -214,24 +210,6 @@ void bitmap_onto(unsigned long *dst, const unsigned long *orig,
 		const unsigned long *relmap, unsigned int bits);
 void bitmap_fold(unsigned long *dst, const unsigned long *orig,
 		unsigned int sz, unsigned int nbits);
-int bitmap_find_free_region(unsigned long *bitmap, unsigned int bits, int order);
-void bitmap_release_region(unsigned long *bitmap, unsigned int pos, int order);
-int bitmap_allocate_region(unsigned long *bitmap, unsigned int pos, int order);
-
-#ifdef __BIG_ENDIAN
-void bitmap_copy_le(unsigned long *dst, const unsigned long *src, unsigned int nbits);
-#else
-#define bitmap_copy_le bitmap_copy
-#endif
-unsigned int bitmap_ord_to_pos(const unsigned long *bitmap, unsigned int ord, unsigned int nbits);
-int bitmap_print_to_pagebuf(bool list, char *buf,
-				   const unsigned long *maskp, int nmaskbits);
-
-extern int bitmap_print_bitmask_to_buf(char *buf, const unsigned long *maskp,
-				      int nmaskbits, loff_t off, size_t count);
-
-extern int bitmap_print_list_to_buf(char *buf, const unsigned long *maskp,
-				      int nmaskbits, loff_t off, size_t count);
 
 #define BITMAP_FIRST_WORD_MASK(start) (~0UL << ((start) & (BITS_PER_LONG - 1)))
 #define BITMAP_LAST_WORD_MASK(nbits) (~0UL >> (-(nbits) & (BITS_PER_LONG - 1)))
@@ -239,20 +217,32 @@ extern int bitmap_print_list_to_buf(char *buf, const unsigned long *maskp,
 static inline void bitmap_zero(unsigned long *dst, unsigned int nbits)
 {
 	unsigned int len = BITS_TO_LONGS(nbits) * sizeof(unsigned long);
-	memset(dst, 0, len);
+
+	if (small_const_nbits(nbits))
+		*dst = 0;
+	else
+		memset(dst, 0, len);
 }
 
 static inline void bitmap_fill(unsigned long *dst, unsigned int nbits)
 {
 	unsigned int len = BITS_TO_LONGS(nbits) * sizeof(unsigned long);
-	memset(dst, 0xff, len);
+
+	if (small_const_nbits(nbits))
+		*dst = ~0UL;
+	else
+		memset(dst, 0xff, len);
 }
 
 static inline void bitmap_copy(unsigned long *dst, const unsigned long *src,
 			unsigned int nbits)
 {
 	unsigned int len = BITS_TO_LONGS(nbits) * sizeof(unsigned long);
-	memcpy(dst, src, len);
+
+	if (small_const_nbits(nbits))
+		*dst = *src;
+	else
+		memcpy(dst, src, len);
 }
 
 /*
@@ -267,8 +257,12 @@ static inline void bitmap_copy_clear_tail(unsigned long *dst,
 }
 
 /*
- * On 32-bit systems bitmaps are represented as u32 arrays internally, and
- * therefore conversion is not needed when copying data from/to arrays of u32.
+ * On 32-bit systems bitmaps are represented as u32 arrays internally. On LE64
+ * machines the order of hi and lo parts of numbers match the bitmap structure.
+ * In both cases conversion is not needed when copying data from/to arrays of
+ * u32. But in LE64 case, typecast in bitmap_copy_clear_tail() may lead
+ * to out-of-bound access. To avoid that, both LE and BE variants of 64-bit
+ * architectures are not using bitmap_copy_clear_tail().
  */
 #if BITS_PER_LONG == 64
 void bitmap_from_arr32(unsigned long *bitmap, const u32 *buf,
@@ -284,7 +278,21 @@ void bitmap_to_arr32(u32 *buf, const unsigned long *bitmap,
 			(const unsigned long *) (bitmap), (nbits))
 #endif
 
-static inline int bitmap_and(unsigned long *dst, const unsigned long *src1,
+/*
+ * On 64-bit systems bitmaps are represented as u64 arrays internally. So,
+ * the conversion is not needed when copying data from/to arrays of u64.
+ */
+#if BITS_PER_LONG == 32
+void bitmap_from_arr64(unsigned long *bitmap, const u64 *buf, unsigned int nbits);
+void bitmap_to_arr64(u64 *buf, const unsigned long *bitmap, unsigned int nbits);
+#else
+#define bitmap_from_arr64(bitmap, buf, nbits)			\
+	bitmap_copy_clear_tail((unsigned long *)(bitmap), (const unsigned long *)(buf), (nbits))
+#define bitmap_to_arr64(buf, bitmap, nbits)			\
+	bitmap_copy_clear_tail((unsigned long *)(buf), (const unsigned long *)(bitmap), (nbits))
+#endif
+
+static inline bool bitmap_and(unsigned long *dst, const unsigned long *src1,
 			const unsigned long *src2, unsigned int nbits)
 {
 	if (small_const_nbits(nbits))
@@ -310,7 +318,7 @@ static inline void bitmap_xor(unsigned long *dst, const unsigned long *src1,
 		__bitmap_xor(dst, src1, src2, nbits);
 }
 
-static inline int bitmap_andnot(unsigned long *dst, const unsigned long *src1,
+static inline bool bitmap_andnot(unsigned long *dst, const unsigned long *src1,
 			const unsigned long *src2, unsigned int nbits)
 {
 	if (small_const_nbits(nbits))
@@ -334,8 +342,8 @@ static inline void bitmap_complement(unsigned long *dst, const unsigned long *sr
 #endif
 #define BITMAP_MEM_MASK (BITMAP_MEM_ALIGNMENT - 1)
 
-static inline int bitmap_equal(const unsigned long *src1,
-			const unsigned long *src2, unsigned int nbits)
+static inline bool bitmap_equal(const unsigned long *src1,
+				const unsigned long *src2, unsigned int nbits)
 {
 	if (small_const_nbits(nbits))
 		return !((*src1 ^ *src2) & BITMAP_LAST_WORD_MASK(nbits));
@@ -365,8 +373,9 @@ static inline bool bitmap_or_equal(const unsigned long *src1,
 	return !(((*src1 | *src2) ^ *src3) & BITMAP_LAST_WORD_MASK(nbits));
 }
 
-static inline int bitmap_intersects(const unsigned long *src1,
-			const unsigned long *src2, unsigned int nbits)
+static inline bool bitmap_intersects(const unsigned long *src1,
+				     const unsigned long *src2,
+				     unsigned int nbits)
 {
 	if (small_const_nbits(nbits))
 		return ((*src1 & *src2) & BITMAP_LAST_WORD_MASK(nbits)) != 0;
@@ -374,8 +383,8 @@ static inline int bitmap_intersects(const unsigned long *src1,
 		return __bitmap_intersects(src1, src2, nbits);
 }
 
-static inline int bitmap_subset(const unsigned long *src1,
-			const unsigned long *src2, unsigned int nbits)
+static inline bool bitmap_subset(const unsigned long *src1,
+				 const unsigned long *src2, unsigned int nbits)
 {
 	if (small_const_nbits(nbits))
 		return ! ((*src1 & ~(*src2)) & BITMAP_LAST_WORD_MASK(nbits));
@@ -399,11 +408,21 @@ static inline bool bitmap_full(const unsigned long *src, unsigned int nbits)
 	return find_first_zero_bit(src, nbits) == nbits;
 }
 
-static __always_inline int bitmap_weight(const unsigned long *src, unsigned int nbits)
+static __always_inline
+unsigned int bitmap_weight(const unsigned long *src, unsigned int nbits)
 {
 	if (small_const_nbits(nbits))
 		return hweight_long(*src & BITMAP_LAST_WORD_MASK(nbits));
 	return __bitmap_weight(src, nbits);
+}
+
+static __always_inline
+unsigned long bitmap_weight_and(const unsigned long *src1,
+				const unsigned long *src2, unsigned int nbits)
+{
+	if (small_const_nbits(nbits))
+		return hweight_long(*src1 & *src2 & BITMAP_LAST_WORD_MASK(nbits));
+	return __bitmap_weight_and(src1, src2, nbits);
 }
 
 static __always_inline void bitmap_set(unsigned long *map, unsigned int start,
@@ -411,6 +430,8 @@ static __always_inline void bitmap_set(unsigned long *map, unsigned int start,
 {
 	if (__builtin_constant_p(nbits) && nbits == 1)
 		__set_bit(start, map);
+	else if (small_const_nbits(start + nbits))
+		*map |= GENMASK(start + nbits - 1, start);
 	else if (__builtin_constant_p(start & BITMAP_MEM_MASK) &&
 		 IS_ALIGNED(start, BITMAP_MEM_ALIGNMENT) &&
 		 __builtin_constant_p(nbits & BITMAP_MEM_MASK) &&
@@ -425,6 +446,8 @@ static __always_inline void bitmap_clear(unsigned long *map, unsigned int start,
 {
 	if (__builtin_constant_p(nbits) && nbits == 1)
 		__clear_bit(start, map);
+	else if (small_const_nbits(start + nbits))
+		*map &= ~GENMASK(start + nbits - 1, start);
 	else if (__builtin_constant_p(start & BITMAP_MEM_MASK) &&
 		 IS_ALIGNED(start, BITMAP_MEM_ALIGNMENT) &&
 		 __builtin_constant_p(nbits & BITMAP_MEM_MASK) &&
@@ -464,14 +487,6 @@ static inline void bitmap_replace(unsigned long *dst,
 		__bitmap_replace(dst, old, new, mask, nbits);
 }
 
-static inline void bitmap_next_clear_region(unsigned long *bitmap,
-					    unsigned int *rs, unsigned int *re,
-					    unsigned int end)
-{
-	*rs = find_next_zero_bit(bitmap, end, *rs);
-	*re = find_next_bit(bitmap, end, *rs + 1);
-}
-
 static inline void bitmap_next_set_region(unsigned long *bitmap,
 					  unsigned int *rs, unsigned int *re,
 					  unsigned int end)
@@ -480,24 +495,65 @@ static inline void bitmap_next_set_region(unsigned long *bitmap,
 	*re = find_next_zero_bit(bitmap, end, *rs + 1);
 }
 
-/*
- * Bitmap region iterators.  Iterates over the bitmap between [@start, @end).
- * @rs and @re should be integer variables and will be set to start and end
- * index of the current clear or set region.
+/**
+ * bitmap_release_region - release allocated bitmap region
+ *	@bitmap: array of unsigned longs corresponding to the bitmap
+ *	@pos: beginning of bit region to release
+ *	@order: region size (log base 2 of number of bits) to release
+ *
+ * This is the complement to __bitmap_find_free_region() and releases
+ * the found region (by clearing it in the bitmap).
  */
-#define bitmap_for_each_clear_region(bitmap, rs, re, start, end)	     \
-	for ((rs) = (start),						     \
-	     bitmap_next_clear_region((bitmap), &(rs), &(re), (end));	     \
-	     (rs) < (re);						     \
-	     (rs) = (re) + 1,						     \
-	     bitmap_next_clear_region((bitmap), &(rs), &(re), (end)))
+static inline void bitmap_release_region(unsigned long *bitmap, unsigned int pos, int order)
+{
+	bitmap_clear(bitmap, pos, BIT(order));
+}
 
-#define bitmap_for_each_set_region(bitmap, rs, re, start, end)		     \
-	for ((rs) = (start),						     \
-	     bitmap_next_set_region((bitmap), &(rs), &(re), (end));	     \
-	     (rs) < (re);						     \
-	     (rs) = (re) + 1,						     \
-	     bitmap_next_set_region((bitmap), &(rs), &(re), (end)))
+/**
+ * bitmap_allocate_region - allocate bitmap region
+ *	@bitmap: array of unsigned longs corresponding to the bitmap
+ *	@pos: beginning of bit region to allocate
+ *	@order: region size (log base 2 of number of bits) to allocate
+ *
+ * Allocate (set bits in) a specified region of a bitmap.
+ *
+ * Returns: 0 on success, or %-EBUSY if specified region wasn't
+ * free (not all bits were zero).
+ */
+static inline int bitmap_allocate_region(unsigned long *bitmap, unsigned int pos, int order)
+{
+	unsigned int len = BIT(order);
+
+	if (find_next_bit(bitmap, pos + len, pos) < pos + len)
+		return -EBUSY;
+	bitmap_set(bitmap, pos, len);
+	return 0;
+}
+
+/**
+ * bitmap_find_free_region - find a contiguous aligned mem region
+ *	@bitmap: array of unsigned longs corresponding to the bitmap
+ *	@bits: number of bits in the bitmap
+ *	@order: region size (log base 2 of number of bits) to find
+ *
+ * Find a region of free (zero) bits in a @bitmap of @bits bits and
+ * allocate them (set them to one).  Only consider regions of length
+ * a power (@order) of two, aligned to that power of two, which
+ * makes the search algorithm much faster.
+ *
+ * Returns: the bit offset in bitmap of the allocated region,
+ * or -errno on failure.
+ */
+static inline int bitmap_find_free_region(unsigned long *bitmap, unsigned int bits, int order)
+{
+	unsigned int pos, end;		/* scans bitmap by regions of size order */
+
+	for (pos = 0; (end = pos + BIT(order)) <= bits; pos = end) {
+		if (!bitmap_allocate_region(bitmap, pos, order))
+			return pos;
+	}
+	return -ENOMEM;
+}
 
 /**
  * BITMAP_FROM_U64() - Represent u64 value in the format suitable for bitmap.
@@ -544,10 +600,7 @@ static inline void bitmap_next_set_region(unsigned long *bitmap,
  */
 static inline void bitmap_from_u64(unsigned long *dst, u64 mask)
 {
-	dst[0] = mask & ULONG_MAX;
-
-	if (sizeof(mask) > sizeof(unsigned long))
-		dst[1] = mask >> 32;
+	bitmap_from_arr64(dst, &mask, 64);
 }
 
 /**

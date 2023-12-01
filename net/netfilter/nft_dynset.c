@@ -44,33 +44,34 @@ static int nft_dynset_expr_setup(const struct nft_dynset *priv,
 	return 0;
 }
 
-static void *nft_dynset_new(struct nft_set *set, const struct nft_expr *expr,
-			    struct nft_regs *regs)
+static struct nft_elem_priv *nft_dynset_new(struct nft_set *set,
+					    const struct nft_expr *expr,
+					    struct nft_regs *regs)
 {
 	const struct nft_dynset *priv = nft_expr_priv(expr);
 	struct nft_set_ext *ext;
+	void *elem_priv;
 	u64 timeout;
-	void *elem;
 
 	if (!atomic_add_unless(&set->nelems, 1, set->size))
 		return NULL;
 
 	timeout = priv->timeout ? : set->timeout;
-	elem = nft_set_elem_init(set, &priv->tmpl,
-				 &regs->data[priv->sreg_key], NULL,
-				 &regs->data[priv->sreg_data],
-				 timeout, 0, GFP_ATOMIC);
-	if (elem == NULL)
+	elem_priv = nft_set_elem_init(set, &priv->tmpl,
+				      &regs->data[priv->sreg_key], NULL,
+				      &regs->data[priv->sreg_data],
+				      timeout, 0, GFP_ATOMIC);
+	if (IS_ERR(elem_priv))
 		goto err1;
 
-	ext = nft_set_elem_ext(set, elem);
+	ext = nft_set_elem_ext(set, elem_priv);
 	if (priv->num_exprs && nft_dynset_expr_setup(priv, ext) < 0)
 		goto err2;
 
-	return elem;
+	return elem_priv;
 
 err2:
-	nft_set_elem_destroy(set, elem, false);
+	nft_set_elem_destroy(set, elem_priv, false);
 err1:
 	if (set->size)
 		atomic_dec(&set->nelems);
@@ -148,7 +149,7 @@ static const struct nla_policy nft_dynset_policy[NFTA_DYNSET_MAX + 1] = {
 	[NFTA_DYNSET_SET_NAME]	= { .type = NLA_STRING,
 				    .len = NFT_SET_MAXNAMELEN - 1 },
 	[NFTA_DYNSET_SET_ID]	= { .type = NLA_U32 },
-	[NFTA_DYNSET_OP]	= { .type = NLA_U32 },
+	[NFTA_DYNSET_OP]	= NLA_POLICY_MAX(NLA_BE32, 255),
 	[NFTA_DYNSET_SREG_KEY]	= { .type = NLA_U32 },
 	[NFTA_DYNSET_SREG_DATA]	= { .type = NLA_U32 },
 	[NFTA_DYNSET_TIMEOUT]	= { .type = NLA_U64 },
@@ -191,6 +192,9 @@ static int nft_dynset_init(const struct nft_ctx *ctx,
 	if (IS_ERR(set))
 		return PTR_ERR(set);
 
+	if (set->flags & NFT_SET_OBJECT)
+		return -EOPNOTSUPP;
+
 	if (set->ops->update == NULL)
 		return -EOPNOTSUPP;
 
@@ -198,17 +202,8 @@ static int nft_dynset_init(const struct nft_ctx *ctx,
 		return -EBUSY;
 
 	priv->op = ntohl(nla_get_be32(tb[NFTA_DYNSET_OP]));
-	switch (priv->op) {
-	case NFT_DYNSET_OP_ADD:
-	case NFT_DYNSET_OP_DELETE:
-		break;
-	case NFT_DYNSET_OP_UPDATE:
-		if (!(set->flags & NFT_SET_TIMEOUT))
-			return -EOPNOTSUPP;
-		break;
-	default:
+	if (priv->op > NFT_DYNSET_OP_DELETE)
 		return -EOPNOTSUPP;
-	}
 
 	timeout = 0;
 	if (tb[NFTA_DYNSET_TIMEOUT] != NULL) {
@@ -351,7 +346,7 @@ static void nft_dynset_activate(const struct nft_ctx *ctx,
 {
 	struct nft_dynset *priv = nft_expr_priv(expr);
 
-	priv->set->use++;
+	nf_tables_activate_set(ctx, priv->set);
 }
 
 static void nft_dynset_destroy(const struct nft_ctx *ctx,
@@ -366,7 +361,8 @@ static void nft_dynset_destroy(const struct nft_ctx *ctx,
 	nf_tables_destroy_set(ctx, priv->set);
 }
 
-static int nft_dynset_dump(struct sk_buff *skb, const struct nft_expr *expr)
+static int nft_dynset_dump(struct sk_buff *skb,
+			   const struct nft_expr *expr, bool reset)
 {
 	const struct nft_dynset *priv = nft_expr_priv(expr);
 	u32 flags = priv->invert ? NFT_DYNSET_F_INV : 0;
@@ -388,7 +384,7 @@ static int nft_dynset_dump(struct sk_buff *skb, const struct nft_expr *expr)
 	if (priv->set->num_exprs == 0) {
 		if (priv->num_exprs == 1) {
 			if (nft_expr_dump(skb, NFTA_DYNSET_EXPR,
-					  priv->expr_array[0]))
+					  priv->expr_array[0], reset))
 				goto nla_put_failure;
 		} else if (priv->num_exprs > 1) {
 			struct nlattr *nest;
@@ -399,7 +395,7 @@ static int nft_dynset_dump(struct sk_buff *skb, const struct nft_expr *expr)
 
 			for (i = 0; i < priv->num_exprs; i++) {
 				if (nft_expr_dump(skb, NFTA_LIST_ELEM,
-						  priv->expr_array[i]))
+						  priv->expr_array[i], reset))
 					goto nla_put_failure;
 			}
 			nla_nest_end(skb, nest);
@@ -422,6 +418,7 @@ static const struct nft_expr_ops nft_dynset_ops = {
 	.activate	= nft_dynset_activate,
 	.deactivate	= nft_dynset_deactivate,
 	.dump		= nft_dynset_dump,
+	.reduce		= NFT_REDUCE_READONLY,
 };
 
 struct nft_expr_type nft_dynset_type __read_mostly = {

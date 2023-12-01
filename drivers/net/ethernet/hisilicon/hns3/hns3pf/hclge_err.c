@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0+
 /* Copyright (c) 2016-2017 Hisilicon Limited. */
 
+#include <linux/sched/clock.h>
+
 #include "hclge_err.h"
 
 static const struct hclge_hw_error hclge_imp_tcm_ecc_int[] = {
@@ -1243,6 +1245,9 @@ static const struct hclge_hw_module_id hclge_hw_module_id_st[] = {
 		.module_id = MODULE_MASTER,
 		.msg = "MODULE_MASTER"
 	}, {
+		.module_id = MODULE_HIMAC,
+		.msg = "MODULE_HIMAC"
+	}, {
 		.module_id = MODULE_ROCEE_TOP,
 		.msg = "MODULE_ROCEE_TOP"
 	}, {
@@ -1296,10 +1301,12 @@ static const struct hclge_hw_type_id hclge_hw_type_id_st[] = {
 		.msg = "tqp_int_ecc_error"
 	}, {
 		.type_id = PF_ABNORMAL_INT_ERROR,
-		.msg = "pf_abnormal_int_error"
+		.msg = "pf_abnormal_int_error",
+		.cause_by_vf = true
 	}, {
 		.type_id = MPF_ABNORMAL_INT_ERROR,
-		.msg = "mpf_abnormal_int_error"
+		.msg = "mpf_abnormal_int_error",
+		.cause_by_vf = true
 	}, {
 		.type_id = COMMON_ERROR,
 		.msg = "common_error"
@@ -1316,12 +1323,21 @@ static const struct hclge_hw_type_id hclge_hw_type_id_st[] = {
 		.type_id = GLB_ERROR,
 		.msg = "glb_error"
 	}, {
+		.type_id = LINK_ERROR,
+		.msg = "link_error"
+	}, {
+		.type_id = PTP_ERROR,
+		.msg = "ptp_error"
+	}, {
 		.type_id = ROCEE_NORMAL_ERR,
 		.msg = "rocee_normal_error"
 	}, {
 		.type_id = ROCEE_OVF_ERR,
 		.msg = "rocee_ovf_error"
-	}
+	}, {
+		.type_id = ROCEE_BUS_ERR,
+		.msg = "rocee_bus_error"
+	},
 };
 
 static void hclge_log_error(struct device *dev, char *reg,
@@ -1387,7 +1403,7 @@ static int hclge_config_common_hw_err_int(struct hclge_dev *hdev, bool en)
 
 	/* configure common error interrupts */
 	hclge_cmd_setup_basic_desc(&desc[0], HCLGE_COMMON_ECC_INT_CFG, false);
-	desc[0].flag |= cpu_to_le16(HCLGE_CMD_FLAG_NEXT);
+	desc[0].flag |= cpu_to_le16(HCLGE_COMM_CMD_FLAG_NEXT);
 	hclge_cmd_setup_basic_desc(&desc[1], HCLGE_COMMON_ECC_INT_CFG, false);
 
 	if (en) {
@@ -1486,7 +1502,7 @@ static int hclge_config_ppp_error_interrupt(struct hclge_dev *hdev, u32 cmd,
 
 	/* configure PPP error interrupts */
 	hclge_cmd_setup_basic_desc(&desc[0], cmd, false);
-	desc[0].flag |= cpu_to_le16(HCLGE_CMD_FLAG_NEXT);
+	desc[0].flag |= cpu_to_le16(HCLGE_COMM_CMD_FLAG_NEXT);
 	hclge_cmd_setup_basic_desc(&desc[1], cmd, false);
 
 	if (cmd == HCLGE_PPP_CMD0_INT_CMD) {
@@ -1621,7 +1637,7 @@ static int hclge_config_ppu_error_interrupts(struct hclge_dev *hdev, u32 cmd,
 	/* configure PPU error interrupts */
 	if (cmd == HCLGE_PPU_MPF_ECC_INT_CMD) {
 		hclge_cmd_setup_basic_desc(&desc[0], cmd, false);
-		desc[0].flag |= cpu_to_le16(HCLGE_CMD_FLAG_NEXT);
+		desc[0].flag |= cpu_to_le16(HCLGE_COMM_CMD_FLAG_NEXT);
 		hclge_cmd_setup_basic_desc(&desc[1], cmd, false);
 		if (en) {
 			desc[0].data[0] =
@@ -1706,7 +1722,7 @@ static int hclge_config_ssu_hw_err_int(struct hclge_dev *hdev, bool en)
 
 	/* configure SSU ecc error interrupts */
 	hclge_cmd_setup_basic_desc(&desc[0], HCLGE_SSU_ECC_INT_CMD, false);
-	desc[0].flag |= cpu_to_le16(HCLGE_CMD_FLAG_NEXT);
+	desc[0].flag |= cpu_to_le16(HCLGE_COMM_CMD_FLAG_NEXT);
 	hclge_cmd_setup_basic_desc(&desc[1], HCLGE_SSU_ECC_INT_CMD, false);
 	if (en) {
 		desc[0].data[0] = cpu_to_le32(HCLGE_SSU_1BIT_ECC_ERR_INT_EN);
@@ -1728,7 +1744,7 @@ static int hclge_config_ssu_hw_err_int(struct hclge_dev *hdev, bool en)
 
 	/* configure SSU common error interrupts */
 	hclge_cmd_setup_basic_desc(&desc[0], HCLGE_SSU_COMMON_INT_CMD, false);
-	desc[0].flag |= cpu_to_le16(HCLGE_CMD_FLAG_NEXT);
+	desc[0].flag |= cpu_to_le16(HCLGE_COMM_CMD_FLAG_NEXT);
 	hclge_cmd_setup_basic_desc(&desc[1], HCLGE_SSU_COMMON_INT_CMD, false);
 
 	if (en) {
@@ -1951,7 +1967,7 @@ static int hclge_handle_mpf_ras_error(struct hclge_dev *hdev,
 				&ae_dev->hw_err_reset_req);
 
 	/* clear all main PF RAS errors */
-	hclge_cmd_reuse_desc(&desc[0], false);
+	hclge_comm_cmd_reuse_desc(&desc[0], false);
 	ret = hclge_cmd_send(&hdev->hw, &desc[0], num);
 	if (ret)
 		dev_err(dev, "clear all mpf ras int cmd failed (%d)\n", ret);
@@ -1965,7 +1981,7 @@ static int hclge_handle_mpf_ras_error(struct hclge_dev *hdev,
  * @num:  number of extended command structures
  *
  * This function handles all the PF RAS errors in the
- * hw register/s using command.
+ * hw registers using command.
  */
 static int hclge_handle_pf_ras_error(struct hclge_dev *hdev,
 				     struct hclge_desc *desc,
@@ -2024,7 +2040,7 @@ static int hclge_handle_pf_ras_error(struct hclge_dev *hdev,
 	}
 
 	/* clear all PF RAS errors */
-	hclge_cmd_reuse_desc(&desc[0], false);
+	hclge_comm_cmd_reuse_desc(&desc[0], false);
 	ret = hclge_cmd_send(&hdev->hw, &desc[0], num);
 	if (ret)
 		dev_err(dev, "clear all pf ras int cmd failed (%d)\n", ret);
@@ -2075,8 +2091,8 @@ static int hclge_log_rocee_axi_error(struct hclge_dev *hdev)
 				   true);
 	hclge_cmd_setup_basic_desc(&desc[2], HCLGE_QUERY_ROCEE_AXI_RAS_INFO_CMD,
 				   true);
-	desc[0].flag |= cpu_to_le16(HCLGE_CMD_FLAG_NEXT);
-	desc[1].flag |= cpu_to_le16(HCLGE_CMD_FLAG_NEXT);
+	desc[0].flag |= cpu_to_le16(HCLGE_COMM_CMD_FLAG_NEXT);
+	desc[1].flag |= cpu_to_le16(HCLGE_COMM_CMD_FLAG_NEXT);
 
 	ret = hclge_cmd_send(&hdev->hw, &desc[0], 3);
 	if (ret) {
@@ -2107,7 +2123,7 @@ static int hclge_log_rocee_ecc_error(struct hclge_dev *hdev)
 
 	ret = hclge_cmd_query_error(hdev, &desc[0],
 				    HCLGE_QUERY_ROCEE_ECC_RAS_INFO_CMD,
-				    HCLGE_CMD_FLAG_NEXT);
+				    HCLGE_COMM_CMD_FLAG_NEXT);
 	if (ret) {
 		dev_err(dev, "failed(%d) to query ROCEE ECC error sts\n", ret);
 		return ret;
@@ -2223,7 +2239,7 @@ hclge_log_and_clear_rocee_ras_error(struct hclge_dev *hdev)
 	}
 
 	/* clear error status */
-	hclge_cmd_reuse_desc(&desc[0], false);
+	hclge_comm_cmd_reuse_desc(&desc[0], false);
 	ret = hclge_cmd_send(&hdev->hw, &desc[0], 1);
 	if (ret) {
 		dev_err(dev, "failed(%d) to clear ROCEE RAS error\n", ret);
@@ -2393,7 +2409,8 @@ static int hclge_clear_hw_msix_error(struct hclge_dev *hdev,
 	else
 		desc[0].opcode = cpu_to_le16(HCLGE_QUERY_CLEAR_ALL_PF_MSIX_INT);
 
-	desc[0].flag = cpu_to_le16(HCLGE_CMD_FLAG_NO_INTR | HCLGE_CMD_FLAG_IN);
+	desc[0].flag = cpu_to_le16(HCLGE_COMM_CMD_FLAG_NO_INTR |
+				   HCLGE_COMM_CMD_FLAG_IN);
 
 	return hclge_cmd_send(&hdev->hw, &desc[0], bd_num);
 }
@@ -2744,7 +2761,7 @@ void hclge_handle_occurred_error(struct hclge_dev *hdev)
 		hclge_handle_error_info_log(ae_dev);
 }
 
-static void
+static bool
 hclge_handle_error_type_reg_log(struct device *dev,
 				struct hclge_mod_err_info *mod_info,
 				struct hclge_type_reg_err_info *type_reg_info)
@@ -2755,6 +2772,7 @@ hclge_handle_error_type_reg_log(struct device *dev,
 	u8 mod_id, total_module, type_id, total_type, i, is_ras;
 	u8 index_module = MODULE_NONE;
 	u8 index_type = NONE_ERROR;
+	bool cause_by_vf = false;
 
 	mod_id = mod_info->mod_id;
 	type_id = type_reg_info->type_id & HCLGE_ERR_TYPE_MASK;
@@ -2773,6 +2791,7 @@ hclge_handle_error_type_reg_log(struct device *dev,
 	for (i = 0; i < total_type; i++) {
 		if (type_id == hclge_hw_type_id_st[i].type_id) {
 			index_type = i;
+			cause_by_vf = hclge_hw_type_id_st[i].cause_by_vf;
 			break;
 		}
 	}
@@ -2790,6 +2809,8 @@ hclge_handle_error_type_reg_log(struct device *dev,
 	dev_err(dev, "reg_value:\n");
 	for (i = 0; i < type_reg_info->reg_num; i++)
 		dev_err(dev, "0x%08x\n", type_reg_info->hclge_reg[i]);
+
+	return cause_by_vf;
 }
 
 static void hclge_handle_error_module_log(struct hnae3_ae_dev *ae_dev,
@@ -2800,6 +2821,7 @@ static void hclge_handle_error_module_log(struct hnae3_ae_dev *ae_dev,
 	struct device *dev = &hdev->pdev->dev;
 	struct hclge_mod_err_info *mod_info;
 	struct hclge_sum_err_info *sum_info;
+	bool cause_by_vf = false;
 	u8 mod_num, err_num, i;
 	u32 offset = 0;
 
@@ -2828,12 +2850,16 @@ static void hclge_handle_error_module_log(struct hnae3_ae_dev *ae_dev,
 
 			type_reg_info = (struct hclge_type_reg_err_info *)
 					    &buf[offset++];
-			hclge_handle_error_type_reg_log(dev, mod_info,
-							type_reg_info);
+			if (hclge_handle_error_type_reg_log(dev, mod_info,
+							    type_reg_info))
+				cause_by_vf = true;
 
 			offset += type_reg_info->reg_num;
 		}
 	}
+
+	if (hnae3_ae_dev_vf_fault_supported(hdev->ae_dev) && cause_by_vf)
+		set_bit(HNAE3_VF_EXP_RESET, &ae_dev->hw_err_reset_req);
 }
 
 static int hclge_query_all_err_bd_num(struct hclge_dev *hdev, u32 *bd_num)
@@ -2924,4 +2950,99 @@ err_desc:
 	kfree(desc);
 out:
 	return ret;
+}
+
+static bool hclge_reset_vf_in_bitmap(struct hclge_dev *hdev,
+				     unsigned long *bitmap)
+{
+	struct hclge_vport *vport;
+	bool exist_set = false;
+	int func_id;
+	int ret;
+
+	func_id = find_first_bit(bitmap, HCLGE_VPORT_NUM);
+	if (func_id == PF_VPORT_ID)
+		return false;
+
+	while (func_id != HCLGE_VPORT_NUM) {
+		vport = hclge_get_vf_vport(hdev,
+					   func_id - HCLGE_VF_VPORT_START_NUM);
+		if (!vport) {
+			dev_err(&hdev->pdev->dev, "invalid func id(%d)\n",
+				func_id);
+			return false;
+		}
+
+		dev_info(&hdev->pdev->dev, "do function %d recovery.", func_id);
+
+		ret = hclge_reset_tqp(&vport->nic);
+		if (ret) {
+			dev_err(&hdev->pdev->dev,
+				"failed to reset tqp, ret = %d.", ret);
+			return false;
+		}
+
+		ret = hclge_inform_vf_reset(vport, HNAE3_VF_FUNC_RESET);
+		if (ret) {
+			dev_err(&hdev->pdev->dev,
+				"failed to reset func %d, ret = %d.",
+				func_id, ret);
+			return false;
+		}
+
+		exist_set = true;
+		clear_bit(func_id, bitmap);
+		func_id = find_first_bit(bitmap, HCLGE_VPORT_NUM);
+	}
+
+	return exist_set;
+}
+
+static void hclge_get_vf_fault_bitmap(struct hclge_desc *desc,
+				      unsigned long *bitmap)
+{
+#define HCLGE_FIR_FAULT_BYTES	24
+#define HCLGE_SEC_FAULT_BYTES	8
+
+	u8 *buff;
+
+	BUILD_BUG_ON(HCLGE_FIR_FAULT_BYTES + HCLGE_SEC_FAULT_BYTES !=
+		     BITS_TO_BYTES(HCLGE_VPORT_NUM));
+
+	memcpy(bitmap, desc[0].data, HCLGE_FIR_FAULT_BYTES);
+	buff = (u8 *)bitmap + HCLGE_FIR_FAULT_BYTES;
+	memcpy(buff, desc[1].data, HCLGE_SEC_FAULT_BYTES);
+}
+
+int hclge_handle_vf_queue_err_ras(struct hclge_dev *hdev)
+{
+	unsigned long vf_fault_bitmap[BITS_TO_LONGS(HCLGE_VPORT_NUM)];
+	struct hclge_desc desc[2];
+	bool cause_by_vf = false;
+	int ret;
+
+	if (!test_and_clear_bit(HNAE3_VF_EXP_RESET,
+				&hdev->ae_dev->hw_err_reset_req) ||
+	    !hnae3_ae_dev_vf_fault_supported(hdev->ae_dev))
+		return 0;
+
+	hclge_comm_cmd_setup_basic_desc(&desc[0], HCLGE_OPC_GET_QUEUE_ERR_VF,
+					true);
+	desc[0].flag |= cpu_to_le16(HCLGE_COMM_CMD_FLAG_NEXT);
+	hclge_comm_cmd_setup_basic_desc(&desc[1], HCLGE_OPC_GET_QUEUE_ERR_VF,
+					true);
+
+	ret = hclge_comm_cmd_send(&hdev->hw.hw, desc, 2);
+	if (ret) {
+		dev_err(&hdev->pdev->dev,
+			"failed to get vf bitmap, ret = %d.\n", ret);
+		return ret;
+	}
+	hclge_get_vf_fault_bitmap(desc, vf_fault_bitmap);
+
+	cause_by_vf = hclge_reset_vf_in_bitmap(hdev, vf_fault_bitmap);
+	if (cause_by_vf)
+		hdev->ae_dev->hw_err_reset_req = 0;
+
+	return 0;
 }

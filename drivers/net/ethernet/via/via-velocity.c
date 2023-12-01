@@ -57,8 +57,8 @@
 #include <linux/if.h>
 #include <linux/uaccess.h>
 #include <linux/proc_fs.h>
+#include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/of_device.h>
 #include <linux/of_irq.h>
 #include <linux/inetdevice.h>
 #include <linux/platform_device.h>
@@ -2709,8 +2709,7 @@ static int velocity_get_platform_info(struct velocity_info *vptr)
 	struct resource res;
 	int ret;
 
-	if (of_get_property(vptr->dev->of_node, "no-eeprom", NULL))
-		vptr->no_eeprom = 1;
+	vptr->no_eeprom = of_property_read_bool(vptr->dev->of_node, "no-eeprom");
 
 	ret = of_address_to_resource(vptr->dev->of_node, 0, &res);
 	if (ret) {
@@ -2767,6 +2766,7 @@ static int velocity_probe(struct device *dev, int irq,
 	struct velocity_info *vptr;
 	struct mac_regs __iomem *regs;
 	int ret = -ENOMEM;
+	u8 addr[ETH_ALEN];
 
 	/* FIXME: this driver, like almost all other ethernet drivers,
 	 * can support more than MAX_UNITS.
@@ -2820,7 +2820,8 @@ static int velocity_probe(struct device *dev, int irq,
 	mac_wol_reset(regs);
 
 	for (i = 0; i < 6; i++)
-		netdev->dev_addr[i] = readb(&regs->PAR[i]);
+		addr[i] = readb(&regs->PAR[i]);
+	eth_hw_addr_set(netdev, addr);
 
 
 	velocity_get_options(&vptr->options, velocity_nics);
@@ -2844,8 +2845,7 @@ static int velocity_probe(struct device *dev, int irq,
 
 	netdev->netdev_ops = &velocity_netdev_ops;
 	netdev->ethtool_ops = &velocity_ethtool_ops;
-	netif_napi_add(netdev, &vptr->napi, velocity_poll,
-							VELOCITY_NAPI_WEIGHT);
+	netif_napi_add(netdev, &vptr->napi, velocity_poll);
 
 	netdev->hw_features = NETIF_F_IP_CSUM | NETIF_F_SG |
 			   NETIF_F_HW_VLAN_CTAG_TX;
@@ -2957,11 +2957,9 @@ static int velocity_platform_probe(struct platform_device *pdev)
 	return velocity_probe(&pdev->dev, irq, info, BUS_PLATFORM);
 }
 
-static int velocity_platform_remove(struct platform_device *pdev)
+static void velocity_platform_remove(struct platform_device *pdev)
 {
 	velocity_remove(&pdev->dev);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -3249,7 +3247,7 @@ static struct pci_driver velocity_pci_driver = {
 
 static struct platform_driver velocity_platform_driver = {
 	.probe		= velocity_platform_probe,
-	.remove		= velocity_platform_remove,
+	.remove_new	= velocity_platform_remove,
 	.driver = {
 		.name = "via-velocity",
 		.of_match_table = velocity_of_ids,
@@ -3418,13 +3416,13 @@ static void velocity_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo 
 {
 	struct velocity_info *vptr = netdev_priv(dev);
 
-	strlcpy(info->driver, VELOCITY_NAME, sizeof(info->driver));
-	strlcpy(info->version, VELOCITY_VERSION, sizeof(info->version));
+	strscpy(info->driver, VELOCITY_NAME, sizeof(info->driver));
+	strscpy(info->version, VELOCITY_VERSION, sizeof(info->version));
 	if (vptr->pdev)
-		strlcpy(info->bus_info, pci_name(vptr->pdev),
+		strscpy(info->bus_info, pci_name(vptr->pdev),
 						sizeof(info->bus_info));
 	else
-		strlcpy(info->bus_info, "platform", sizeof(info->bus_info));
+		strscpy(info->bus_info, "platform", sizeof(info->bus_info));
 }
 
 static void velocity_ethtool_get_wol(struct net_device *dev, struct ethtool_wolinfo *wol)

@@ -9,7 +9,6 @@
 #include <linux/slab.h>
 #include <linux/i2c.h>
 #include <linux/log2.h>
-#include <linux/gpio.h>
 #include <linux/delay.h>
 #include <linux/regulator/consumer.h>
 #include <linux/v4l2-mediabus.h>
@@ -245,9 +244,7 @@ struct mt9m111 {
 	bool is_streaming;
 	/* user point of view - 0: falling 1: rising edge */
 	unsigned int pclk_sample:1;
-#ifdef CONFIG_MEDIA_CONTROLLER
 	struct media_pad pad;
-#endif
 };
 
 static const struct mt9m111_mode_info mt9m111_mode_data[MT9M111_NUM_MODES] = {
@@ -528,13 +525,9 @@ static int mt9m111_get_fmt(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	if (format->which == V4L2_SUBDEV_FORMAT_TRY) {
-#ifdef CONFIG_VIDEO_V4L2_SUBDEV_API
 		mf = v4l2_subdev_get_try_format(sd, sd_state, format->pad);
 		format->format = *mf;
 		return 0;
-#else
-		return -EINVAL;
-#endif
 	}
 
 	mf->width	= mt9m111->width;
@@ -1121,7 +1114,6 @@ static int mt9m111_s_stream(struct v4l2_subdev *sd, int enable)
 static int mt9m111_init_cfg(struct v4l2_subdev *sd,
 			    struct v4l2_subdev_state *sd_state)
 {
-#ifdef CONFIG_VIDEO_V4L2_SUBDEV_API
 	struct v4l2_mbus_framefmt *format =
 		v4l2_subdev_get_try_format(sd, sd_state, 0);
 
@@ -1133,7 +1125,7 @@ static int mt9m111_init_cfg(struct v4l2_subdev *sd,
 	format->ycbcr_enc	= V4L2_YCBCR_ENC_DEFAULT;
 	format->quantization	= V4L2_QUANTIZATION_DEFAULT;
 	format->xfer_func	= V4L2_XFER_FUNC_DEFAULT;
-#endif
+
 	return 0;
 }
 
@@ -1143,14 +1135,16 @@ static int mt9m111_get_mbus_config(struct v4l2_subdev *sd,
 {
 	struct mt9m111 *mt9m111 = container_of(sd, struct mt9m111, subdev);
 
-	cfg->flags = V4L2_MBUS_MASTER |
-		V4L2_MBUS_HSYNC_ACTIVE_HIGH | V4L2_MBUS_VSYNC_ACTIVE_HIGH |
-		V4L2_MBUS_DATA_ACTIVE_HIGH;
-
-	cfg->flags |= mt9m111->pclk_sample ? V4L2_MBUS_PCLK_SAMPLE_RISING :
-		V4L2_MBUS_PCLK_SAMPLE_FALLING;
-
 	cfg->type = V4L2_MBUS_PARALLEL;
+
+	cfg->bus.parallel.flags = V4L2_MBUS_MASTER |
+				  V4L2_MBUS_HSYNC_ACTIVE_HIGH |
+				  V4L2_MBUS_VSYNC_ACTIVE_HIGH |
+				  V4L2_MBUS_DATA_ACTIVE_HIGH;
+
+	cfg->bus.parallel.flags |= mt9m111->pclk_sample ?
+				   V4L2_MBUS_PCLK_SAMPLE_RISING :
+				   V4L2_MBUS_PCLK_SAMPLE_FALLING;
 
 	return 0;
 }
@@ -1314,13 +1308,11 @@ static int mt9m111_probe(struct i2c_client *client)
 		return ret;
 	}
 
-#ifdef CONFIG_MEDIA_CONTROLLER
 	mt9m111->pad.flags = MEDIA_PAD_FL_SOURCE;
 	mt9m111->subdev.entity.function = MEDIA_ENT_F_CAM_SENSOR;
 	ret = media_entity_pads_init(&mt9m111->subdev.entity, 1, &mt9m111->pad);
 	if (ret < 0)
 		goto out_hdlfree;
-#endif
 
 	mt9m111->current_mode = &mt9m111_mode_data[MT9M111_MODE_SXGA_15FPS];
 	mt9m111->frame_interval.numerator = 1;
@@ -1349,24 +1341,20 @@ static int mt9m111_probe(struct i2c_client *client)
 	return 0;
 
 out_entityclean:
-#ifdef CONFIG_MEDIA_CONTROLLER
 	media_entity_cleanup(&mt9m111->subdev.entity);
 out_hdlfree:
-#endif
 	v4l2_ctrl_handler_free(&mt9m111->hdl);
 
 	return ret;
 }
 
-static int mt9m111_remove(struct i2c_client *client)
+static void mt9m111_remove(struct i2c_client *client)
 {
 	struct mt9m111 *mt9m111 = to_mt9m111(client);
 
 	v4l2_async_unregister_subdev(&mt9m111->subdev);
 	media_entity_cleanup(&mt9m111->subdev.entity);
 	v4l2_ctrl_handler_free(&mt9m111->hdl);
-
-	return 0;
 }
 static const struct of_device_id mt9m111_of_match[] = {
 	{ .compatible = "micron,mt9m111", },
@@ -1383,9 +1371,9 @@ MODULE_DEVICE_TABLE(i2c, mt9m111_id);
 static struct i2c_driver mt9m111_i2c_driver = {
 	.driver = {
 		.name = "mt9m111",
-		.of_match_table = of_match_ptr(mt9m111_of_match),
+		.of_match_table = mt9m111_of_match,
 	},
-	.probe_new	= mt9m111_probe,
+	.probe		= mt9m111_probe,
 	.remove		= mt9m111_remove,
 	.id_table	= mt9m111_id,
 };

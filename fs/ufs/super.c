@@ -137,6 +137,7 @@ static struct dentry *ufs_get_parent(struct dentry *child)
 }
 
 static const struct export_operations ufs_export_ops = {
+	.encode_fh = generic_encode_ino32_fh,
 	.fh_to_dentry	= ufs_fh_to_dentry,
 	.fh_to_parent	= ufs_fh_to_parent,
 	.get_parent	= ufs_get_parent,
@@ -1443,7 +1444,7 @@ static struct inode *ufs_alloc_inode(struct super_block *sb)
 {
 	struct ufs_inode_info *ei;
 
-	ei = kmem_cache_alloc(ufs_inode_cachep, GFP_NOFS);
+	ei = alloc_inode_sb(sb, ufs_inode_cachep, GFP_NOFS);
 	if (!ei)
 		return NULL;
 

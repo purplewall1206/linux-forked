@@ -109,13 +109,6 @@ extern void __key_link_end(struct key *keyring,
 extern key_ref_t find_key_to_update(key_ref_t keyring_ref,
 				    const struct keyring_index_key *index_key);
 
-extern struct key *keyring_search_instkey(struct key *keyring,
-					  key_serial_t target_id);
-
-extern int iterate_over_keyring(const struct key *keyring,
-				int (*func)(const struct key *key, void *data),
-				void *data);
-
 struct keyring_search_context {
 	struct keyring_index_key index_key;
 	const struct cred	*cred;
@@ -165,8 +158,6 @@ extern struct key *request_key_and_link(struct key_type *type,
 
 extern bool lookup_user_key_possessed(const struct key *key,
 				      const struct key_match_data *match_data);
-#define KEY_LOOKUP_CREATE	0x01
-#define KEY_LOOKUP_PARTIAL	0x02
 
 extern long join_session_keyring(const char *name);
 extern void key_change_session_keyring(struct callback_head *twork);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB
+#include <linux/if_vlan.h>
 #include <net/netlink.h>
 #include <net/sch_generic.h>
+#include <net/pkt_sched.h>
 #include <net/dst.h>
 #include <net/ip.h>
 #include <net/ip6_fib.h>
@@ -94,7 +96,7 @@ static int sch_fragment(struct net *net, struct sk_buff *skb,
 		unsigned long orig_dst;
 
 		sch_frag_prepare_frag(skb, xmit);
-		dst_init(&sch_frag_rt.dst, &sch_frag_dst_ops, NULL, 1,
+		dst_init(&sch_frag_rt.dst, &sch_frag_dst_ops, NULL,
 			 DST_OBSOLETE_NONE, DST_NOCOUNT);
 		sch_frag_rt.dst.dev = skb->dev;
 
@@ -110,7 +112,7 @@ static int sch_fragment(struct net *net, struct sk_buff *skb,
 
 		sch_frag_prepare_frag(skb, xmit);
 		memset(&sch_frag_rt, 0, sizeof(sch_frag_rt));
-		dst_init(&sch_frag_rt.dst, &sch_frag_dst_ops, NULL, 1,
+		dst_init(&sch_frag_rt.dst, &sch_frag_dst_ops, NULL,
 			 DST_OBSOLETE_NONE, DST_NOCOUNT);
 		sch_frag_rt.dst.dev = skb->dev;
 
@@ -137,7 +139,7 @@ err:
 
 int sch_frag_xmit_hook(struct sk_buff *skb, int (*xmit)(struct sk_buff *skb))
 {
-	u16 mru = qdisc_skb_cb(skb)->mru;
+	u16 mru = tc_skb_cb(skb)->mru;
 	int err;
 
 	if (mru && skb->len > mru + skb->dev->hard_header_len)

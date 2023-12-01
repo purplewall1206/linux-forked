@@ -12,6 +12,7 @@
 #include <linux/kref.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/acpi.h>
 #include <linux/reset.h>
 #include <linux/reset-controller.h>
 #include <linux/slab.h>
@@ -59,7 +60,7 @@ struct reset_control {
 struct reset_control_array {
 	struct reset_control base;
 	unsigned int num_rstcs;
-	struct reset_control *rstc[];
+	struct reset_control *rstc[] __counted_by(num_rstcs);
 };
 
 static const char *rcdev_name(struct reset_controller_dev *rcdev)
@@ -1100,12 +1101,24 @@ EXPORT_SYMBOL_GPL(__devm_reset_control_bulk_get);
  *
  * Convenience wrapper for __reset_control_get() and reset_control_reset().
  * This is useful for the common case of devices with single, dedicated reset
- * lines.
+ * lines. _RST firmware method will be called for devices with ACPI.
  */
 int __device_reset(struct device *dev, bool optional)
 {
 	struct reset_control *rstc;
 	int ret;
+
+#ifdef CONFIG_ACPI
+	acpi_handle handle = ACPI_HANDLE(dev);
+
+	if (handle) {
+		if (!acpi_has_method(handle, "_RST"))
+			return optional ? 0 : -ENOENT;
+		if (ACPI_FAILURE(acpi_evaluate_object(handle, "_RST", NULL,
+						      NULL)))
+			return -EIO;
+	}
+#endif
 
 	rstc = __reset_control_get(dev, NULL, 0, 0, optional, true);
 	if (IS_ERR(rstc))
@@ -1172,6 +1185,7 @@ of_reset_control_array_get(struct device_node *np, bool shared, bool optional,
 	resets = kzalloc(struct_size(resets, rstc, num), GFP_KERNEL);
 	if (!resets)
 		return ERR_PTR(-ENOMEM);
+	resets->num_rstcs = num;
 
 	for (i = 0; i < num; i++) {
 		rstc = __of_reset_control_get(np, NULL, i, shared, optional,
@@ -1180,7 +1194,6 @@ of_reset_control_array_get(struct device_node *np, bool shared, bool optional,
 			goto err_rst;
 		resets->rstc[i] = rstc;
 	}
-	resets->num_rstcs = num;
 	resets->base.array = true;
 
 	return &resets->base;

@@ -45,6 +45,13 @@ struct csiphy_config {
 struct csiphy_device;
 
 struct csiphy_hw_ops {
+	/*
+	 * csiphy_get_lane_mask - Calculate CSI2 lane mask configuration parameter
+	 * @lane_cfg - CSI2 lane configuration
+	 *
+	 * Return lane mask
+	 */
+	u8 (*get_lane_mask)(struct csiphy_lanes_cfg *lane_cfg);
 	void (*hw_version_read)(struct csiphy_device *csiphy,
 				struct device *dev);
 	void (*reset)(struct csiphy_device *csiphy);
@@ -76,11 +83,11 @@ struct csiphy_device {
 	unsigned int nformats;
 };
 
-struct resources;
+struct camss_subdev_resources;
 
 int msm_csiphy_subdev_init(struct camss *camss,
 			   struct csiphy_device *csiphy,
-			   const struct resources *res, u8 id);
+			   const struct camss_subdev_resources *res, u8 id);
 
 int msm_csiphy_register_entity(struct csiphy_device *csiphy,
 			       struct v4l2_device *v4l2_dev);

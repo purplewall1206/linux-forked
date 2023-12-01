@@ -97,11 +97,9 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/interrupt.h>
-
-#include "../comedidev.h"
-
-#include "comedi_isadma.h"
-#include "comedi_8254.h"
+#include <linux/comedi/comedidev.h>
+#include <linux/comedi/comedi_8254.h>
+#include <linux/comedi/comedi_isadma.h>
 
 /*
  * Register I/O map
@@ -1017,10 +1015,10 @@ static int pcl818_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	else
 		osc_base = I8254_OSC_BASE_1MHZ;
 
-	dev->pacer = comedi_8254_init(dev->iobase + PCL818_TIMER_BASE,
-				      osc_base, I8254_IO8, 0);
-	if (!dev->pacer)
-		return -ENOMEM;
+	dev->pacer = comedi_8254_io_alloc(dev->iobase + PCL818_TIMER_BASE,
+					  osc_base, I8254_IO8, 0);
+	if (IS_ERR(dev->pacer))
+		return PTR_ERR(dev->pacer);
 
 	/* max sampling speed */
 	devpriv->ns_min = board->ns_min;

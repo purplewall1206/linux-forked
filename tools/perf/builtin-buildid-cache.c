@@ -277,8 +277,10 @@ static bool dso__missing_buildid_cache(struct dso *dso, int parm __maybe_unused)
 	char filename[PATH_MAX];
 	struct build_id bid;
 
-	if (dso__build_id_filename(dso, filename, sizeof(filename), false) &&
-	    filename__read_build_id(filename, &bid) == -1) {
+	if (!dso__build_id_filename(dso, filename, sizeof(filename), false))
+		return true;
+
+	if (filename__read_build_id(filename, &bid) == -1) {
 		if (errno == ENOENT)
 			return false;
 
@@ -351,10 +353,14 @@ static int build_id_cache__show_all(void)
 
 static int perf_buildid_cache_config(const char *var, const char *value, void *cb)
 {
-	const char **debuginfod = cb;
+	struct perf_debuginfod *di = cb;
 
-	if (!strcmp(var, "buildid-cache.debuginfod"))
-		*debuginfod = strdup(value);
+	if (!strcmp(var, "buildid-cache.debuginfod")) {
+		di->urls = strdup(value);
+		if (!di->urls)
+			return -ENOMEM;
+		di->set = true;
+	}
 
 	return 0;
 }
@@ -373,8 +379,8 @@ int cmd_buildid_cache(int argc, const char **argv)
 		   *purge_name_list_str = NULL,
 		   *missing_filename = NULL,
 		   *update_name_list_str = NULL,
-		   *kcore_filename = NULL,
-		   *debuginfod = NULL;
+		   *kcore_filename = NULL;
+	struct perf_debuginfod debuginfod = { };
 	char sbuf[STRERR_BUFSIZE];
 
 	struct perf_data data = {
@@ -399,8 +405,10 @@ int cmd_buildid_cache(int argc, const char **argv)
 	OPT_BOOLEAN('f', "force", &force, "don't complain, do it"),
 	OPT_STRING('u', "update", &update_name_list_str, "file list",
 		    "file(s) to update"),
-	OPT_STRING(0, "debuginfod", &debuginfod, "debuginfod url",
-		    "set debuginfod url"),
+	OPT_STRING_OPTARG_SET(0, "debuginfod", &debuginfod.urls,
+			&debuginfod.set, "debuginfod urls",
+			"Enable debuginfod data retrieval from DEBUGINFOD_URLS or specified urls",
+			"system"),
 	OPT_INCR('v', "verbose", &verbose, "be more verbose"),
 	OPT_INTEGER(0, "target-ns", &ns_id, "target pid for namespace context"),
 	OPT_END()
@@ -425,10 +433,7 @@ int cmd_buildid_cache(int argc, const char **argv)
 	if (argc || !(list_files || opts_flag))
 		usage_with_options(buildid_cache_usage, buildid_cache_options);
 
-	if (debuginfod) {
-		pr_debug("DEBUGINFOD_URLS=%s\n", debuginfod);
-		setenv("DEBUGINFOD_URLS", debuginfod, 1);
-	}
+	perf_debuginfod_setup(&debuginfod);
 
 	/* -l is exclusive. It can not be used with other options. */
 	if (list_files && opts_flag) {

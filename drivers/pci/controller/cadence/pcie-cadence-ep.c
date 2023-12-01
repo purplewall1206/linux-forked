@@ -3,6 +3,7 @@
 // Cadence PCIe endpoint controller driver.
 // Author: Cyrille Pitchen <cyrille.pitchen@free-electrons.com>
 
+#include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
@@ -187,8 +188,7 @@ static int cdns_pcie_ep_map_addr(struct pci_epc *epc, u8 fn, u8 vfn,
 	struct cdns_pcie *pcie = &ep->pcie;
 	u32 r;
 
-	r = find_first_zero_bit(&ep->ob_region_map,
-				sizeof(ep->ob_region_map) * BITS_PER_LONG);
+	r = find_first_zero_bit(&ep->ob_region_map, BITS_PER_LONG);
 	if (r >= ep->max_regions - 1) {
 		dev_err(&epc->dev, "no free outbound region\n");
 		return -EINVAL;
@@ -263,7 +263,7 @@ static int cdns_pcie_ep_get_msi(struct pci_epc *epc, u8 fn, u8 vfn)
 	 * Get the Multiple Message Enable bitfield from the Message Control
 	 * register.
 	 */
-	mme = (flags & PCI_MSI_FLAGS_QSIZE) >> 4;
+	mme = FIELD_GET(PCI_MSI_FLAGS_QSIZE, flags);
 
 	return mme;
 }
@@ -395,7 +395,7 @@ static int cdns_pcie_ep_send_msi_irq(struct cdns_pcie_ep *ep, u8 fn, u8 vfn,
 		return -EINVAL;
 
 	/* Get the number of enabled MSIs */
-	mme = (flags & PCI_MSI_FLAGS_QSIZE) >> 4;
+	mme = FIELD_GET(PCI_MSI_FLAGS_QSIZE, flags);
 	msi_count = 1 << mme;
 	if (!interrupt_num || interrupt_num > msi_count)
 		return -EINVAL;
@@ -450,7 +450,7 @@ static int cdns_pcie_ep_map_msi_irq(struct pci_epc *epc, u8 fn, u8 vfn,
 		return -EINVAL;
 
 	/* Get the number of enabled MSIs */
-	mme = (flags & PCI_MSI_FLAGS_QSIZE) >> 4;
+	mme = FIELD_GET(PCI_MSI_FLAGS_QSIZE, flags);
 	msi_count = 1 << mme;
 	if (!interrupt_num || interrupt_num > msi_count)
 		return -EINVAL;
@@ -507,7 +507,7 @@ static int cdns_pcie_ep_send_msix_irq(struct cdns_pcie_ep *ep, u8 fn, u8 vfn,
 
 	reg = cap + PCI_MSIX_TABLE;
 	tbl_offset = cdns_pcie_ep_fn_readl(pcie, fn, reg);
-	bir = tbl_offset & PCI_MSIX_TABLE_BIR;
+	bir = FIELD_GET(PCI_MSIX_TABLE_BIR, tbl_offset);
 	tbl_offset &= PCI_MSIX_TABLE_OFFSET;
 
 	msix_tbl = epf->epf_bar[bir]->addr + tbl_offset;
@@ -565,13 +565,29 @@ static int cdns_pcie_ep_start(struct pci_epc *epc)
 	struct cdns_pcie_ep *ep = epc_get_drvdata(epc);
 	struct cdns_pcie *pcie = &ep->pcie;
 	struct device *dev = pcie->dev;
-	int ret;
+	int max_epfs = sizeof(epc->function_num_map) * 8;
+	int ret, value, epf;
 
 	/*
 	 * BIT(0) is hardwired to 1, hence function 0 is always enabled
 	 * and can't be disabled anyway.
 	 */
 	cdns_pcie_writel(pcie, CDNS_PCIE_LM_EP_FUNC_CFG, epc->function_num_map);
+
+	if (ep->quirk_disable_flr) {
+		for (epf = 0; epf < max_epfs; epf++) {
+			if (!(epc->function_num_map & BIT(epf)))
+				continue;
+
+			value = cdns_pcie_ep_fn_readl(pcie, epf,
+					CDNS_PCIE_EP_FUNC_DEV_CAP_OFFSET +
+					PCI_EXP_DEVCAP);
+			value &= ~PCI_EXP_DEVCAP_FLR;
+			cdns_pcie_ep_fn_writel(pcie, epf,
+					CDNS_PCIE_EP_FUNC_DEV_CAP_OFFSET +
+					PCI_EXP_DEVCAP, value);
+		}
+	}
 
 	ret = cdns_pcie_start_link(pcie);
 	if (ret) {

@@ -11,7 +11,7 @@
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/memblock.h>
-#include <asm/prom.h>
+#include <linux/slab.h>
 #include <asm/drmem.h>
 
 static int n_root_addr_cells, n_root_size_cells;
@@ -67,7 +67,7 @@ static int drmem_update_dt_v1(struct device_node *memory,
 	struct property *new_prop;
 	struct of_drconf_cell_v1 *dr_cell;
 	struct drmem_lmb *lmb;
-	u32 *p;
+	__be32 *p;
 
 	new_prop = clone_property(prop, prop->length);
 	if (!new_prop)

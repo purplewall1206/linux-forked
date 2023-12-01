@@ -8,7 +8,7 @@
  * notifications sent from ACPI via the SAN interface by providing them to any
  * registered external driver.
  *
- * Copyright (C) 2019-2020 Maximilian Luz <luzmaximilian@gmail.com>
+ * Copyright (C) 2019-2022 Maximilian Luz <luzmaximilian@gmail.com>
  */
 
 #include <asm/unaligned.h>
@@ -37,6 +37,7 @@ struct san_data {
 #define to_san_data(ptr, member) \
 	container_of(ptr, struct san_data, member)
 
+static struct workqueue_struct *san_wq;
 
 /* -- dGPU notifier interface. ---------------------------------------------- */
 
@@ -354,9 +355,10 @@ static u32 san_evt_bat_nf(struct ssam_event_notifier *nf,
 	INIT_DELAYED_WORK(&work->work, san_evt_bat_workfn);
 	work->dev = d->dev;
 
-	memcpy(&work->event, event, sizeof(struct ssam_event) + event->length);
+	work->event = *event;
+	memcpy(work->event.data, event->data, event->length);
 
-	schedule_delayed_work(&work->work, delay);
+	queue_delayed_work(san_wq, &work->work, delay);
 	return SSAM_NOTIF_HANDLED;
 }
 
@@ -588,7 +590,7 @@ static acpi_status san_rqst(struct san_data *d, struct gsb_buffer *buffer)
 		return san_rqst_fixup_suspended(d, &rqst, buffer);
 	}
 
-	status = __ssam_retry(ssam_request_sync_onstack, SAN_REQUEST_NUM_TRIES,
+	status = __ssam_retry(ssam_request_do_sync_onstack, SAN_REQUEST_NUM_TRIES,
 			      d->ctrl, &rqst, &rsp, SAN_GSB_MAX_RQSX_PAYLOAD);
 
 	if (!status) {
@@ -739,6 +741,7 @@ static bool is_san_consumer(struct platform_device *pdev, acpi_handle handle)
 	struct acpi_handle_list dep_devices;
 	acpi_handle supplier = ACPI_HANDLE(&pdev->dev);
 	acpi_status status;
+	bool ret = false;
 	int i;
 
 	if (!acpi_has_method(handle, "_DEP"))
@@ -751,11 +754,14 @@ static bool is_san_consumer(struct platform_device *pdev, acpi_handle handle)
 	}
 
 	for (i = 0; i < dep_devices.count; i++) {
-		if (dep_devices.handles[i] == supplier)
-			return true;
+		if (dep_devices.handles[i] == supplier) {
+			ret = true;
+			break;
+		}
 	}
 
-	return false;
+	acpi_handle_list_free(&dep_devices);
+	return ret;
 }
 
 static acpi_status san_consumer_setup(acpi_handle handle, u32 lvl,
@@ -770,7 +776,8 @@ static acpi_status san_consumer_setup(acpi_handle handle, u32 lvl,
 		return AE_OK;
 
 	/* Ignore ACPI devices that are not present. */
-	if (acpi_bus_get_device(handle, &adev) != 0)
+	adev = acpi_fetch_acpi_dev(handle);
+	if (!adev)
 		return AE_OK;
 
 	san_consumer_dbg(&pdev->dev, handle, "creating device link\n");
@@ -847,7 +854,7 @@ err_enable_events:
 	return status;
 }
 
-static int san_remove(struct platform_device *pdev)
+static void san_remove(struct platform_device *pdev)
 {
 	acpi_handle san = ACPI_HANDLE(&pdev->dev);
 
@@ -860,9 +867,7 @@ static int san_remove(struct platform_device *pdev)
 	 * We have unregistered our event sources. Now we need to ensure that
 	 * all delayed works they may have spawned are run to completion.
 	 */
-	flush_scheduled_work();
-
-	return 0;
+	flush_workqueue(san_wq);
 }
 
 static const struct acpi_device_id san_match[] = {
@@ -873,14 +878,34 @@ MODULE_DEVICE_TABLE(acpi, san_match);
 
 static struct platform_driver surface_acpi_notify = {
 	.probe = san_probe,
-	.remove = san_remove,
+	.remove_new = san_remove,
 	.driver = {
 		.name = "surface_acpi_notify",
 		.acpi_match_table = san_match,
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 };
-module_platform_driver(surface_acpi_notify);
+
+static int __init san_init(void)
+{
+	int ret;
+
+	san_wq = alloc_workqueue("san_wq", 0, 0);
+	if (!san_wq)
+		return -ENOMEM;
+	ret = platform_driver_register(&surface_acpi_notify);
+	if (ret)
+		destroy_workqueue(san_wq);
+	return ret;
+}
+module_init(san_init);
+
+static void __exit san_exit(void)
+{
+	platform_driver_unregister(&surface_acpi_notify);
+	destroy_workqueue(san_wq);
+}
+module_exit(san_exit);
 
 MODULE_AUTHOR("Maximilian Luz <luzmaximilian@gmail.com>");
 MODULE_DESCRIPTION("Surface ACPI Notify driver for Surface System Aggregator Module");

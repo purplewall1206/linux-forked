@@ -57,6 +57,7 @@
 #include <linux/crc32poly.h>
 
 #include <net/checksum.h>
+#include <net/gso.h>
 #include <net/ip.h>
 
 #include <linux/io.h>
@@ -224,6 +225,7 @@ MODULE_AUTHOR("David S. Miller (davem@redhat.com) and Jeff Garzik (jgarzik@pobox
 MODULE_DESCRIPTION("Broadcom Tigon3 ethernet driver");
 MODULE_LICENSE("GPL");
 MODULE_FIRMWARE(FIRMWARE_TG3);
+MODULE_FIRMWARE(FIRMWARE_TG357766);
 MODULE_FIRMWARE(FIRMWARE_TG3TSO);
 MODULE_FIRMWARE(FIRMWARE_TG3TSO5);
 
@@ -1537,8 +1539,7 @@ static int tg3_mdio_init(struct tg3 *tp)
 		return -ENOMEM;
 
 	tp->mdio_bus->name     = "tg3 mdio bus";
-	snprintf(tp->mdio_bus->id, MII_BUS_ID_SIZE, "%x",
-		 (tp->pdev->bus->number << 8) | tp->pdev->devfn);
+	snprintf(tp->mdio_bus->id, MII_BUS_ID_SIZE, "%x", pci_dev_id(tp->pdev));
 	tp->mdio_bus->priv     = tp;
 	tp->mdio_bus->parent   = &tp->pdev->dev;
 	tp->mdio_bus->read     = &tg3_mdio_read;
@@ -3942,7 +3943,8 @@ static int tg3_load_tso_firmware(struct tg3 *tp)
 }
 
 /* tp->lock is held. */
-static void __tg3_set_one_mac_addr(struct tg3 *tp, u8 *mac_addr, int index)
+static void __tg3_set_one_mac_addr(struct tg3 *tp, const u8 *mac_addr,
+				   int index)
 {
 	u32 addr_high, addr_low;
 
@@ -5502,7 +5504,6 @@ static bool tg3_setup_fiber_hw_autoneg(struct tg3 *tp, u32 mac_status)
 	int workaround, port_a;
 
 	serdes_cfg = 0;
-	expected_sg_dig_ctrl = 0;
 	workaround = 0;
 	port_a = 1;
 	current_link_up = false;
@@ -5746,7 +5747,6 @@ static int tg3_setup_fiber_phy(struct tg3 *tp, bool force_reset)
 	tw32_f(MAC_EVENT, MAC_EVENT_LNKSTATE_CHANGED);
 	udelay(40);
 
-	current_link_up = false;
 	tp->link_config.rmt_adv = 0;
 	mac_status = tr32(MAC_STATUS);
 
@@ -6180,34 +6180,26 @@ static int tg3_get_ts_info(struct net_device *dev, struct ethtool_ts_info *info)
 	return 0;
 }
 
-static int tg3_ptp_adjfreq(struct ptp_clock_info *ptp, s32 ppb)
+static int tg3_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 {
 	struct tg3 *tp = container_of(ptp, struct tg3, ptp_info);
-	bool neg_adj = false;
-	u32 correction = 0;
-
-	if (ppb < 0) {
-		neg_adj = true;
-		ppb = -ppb;
-	}
+	u64 correction;
+	bool neg_adj;
 
 	/* Frequency adjustment is performed using hardware with a 24 bit
 	 * accumulator and a programmable correction value. On each clk, the
 	 * correction value gets added to the accumulator and when it
 	 * overflows, the time counter is incremented/decremented.
-	 *
-	 * So conversion from ppb to correction value is
-	 *		ppb * (1 << 24) / 1000000000
 	 */
-	correction = div_u64((u64)ppb * (1 << 24), 1000000000ULL) &
-		     TG3_EAV_REF_CLK_CORRECT_MASK;
+	neg_adj = diff_by_scaled_ppm(1 << 24, scaled_ppm, &correction);
 
 	tg3_full_lock(tp, 0);
 
 	if (correction)
 		tw32(TG3_EAV_REF_CLK_CORRECT_CTL,
 		     TG3_EAV_REF_CLK_CORRECT_EN |
-		     (neg_adj ? TG3_EAV_REF_CLK_CORRECT_NEG : 0) | correction);
+		     (neg_adj ? TG3_EAV_REF_CLK_CORRECT_NEG : 0) |
+		     ((u32)correction & TG3_EAV_REF_CLK_CORRECT_MASK));
 	else
 		tw32(TG3_EAV_REF_CLK_CORRECT_CTL, 0);
 
@@ -6322,6 +6314,46 @@ err_out:
 	return -EOPNOTSUPP;
 }
 
+static void tg3_hwclock_to_timestamp(struct tg3 *tp, u64 hwclock,
+				     struct skb_shared_hwtstamps *timestamp)
+{
+	memset(timestamp, 0, sizeof(struct skb_shared_hwtstamps));
+	timestamp->hwtstamp  = ns_to_ktime((hwclock & TG3_TSTAMP_MASK) +
+					   tp->ptp_adjust);
+}
+
+static void tg3_read_tx_tstamp(struct tg3 *tp, u64 *hwclock)
+{
+	*hwclock = tr32(TG3_TX_TSTAMP_LSB);
+	*hwclock |= (u64)tr32(TG3_TX_TSTAMP_MSB) << 32;
+}
+
+static long tg3_ptp_ts_aux_work(struct ptp_clock_info *ptp)
+{
+	struct tg3 *tp = container_of(ptp, struct tg3, ptp_info);
+	struct skb_shared_hwtstamps timestamp;
+	u64 hwclock;
+
+	if (tp->ptp_txts_retrycnt > 2)
+		goto done;
+
+	tg3_read_tx_tstamp(tp, &hwclock);
+
+	if (hwclock != tp->pre_tx_ts) {
+		tg3_hwclock_to_timestamp(tp, hwclock, &timestamp);
+		skb_tstamp_tx(tp->tx_tstamp_skb, &timestamp);
+		goto done;
+	}
+	tp->ptp_txts_retrycnt++;
+	return HZ / 10;
+done:
+	dev_consume_skb_any(tp->tx_tstamp_skb);
+	tp->tx_tstamp_skb = NULL;
+	tp->ptp_txts_retrycnt = 0;
+	tp->pre_tx_ts = 0;
+	return -1;
+}
+
 static const struct ptp_clock_info tg3_ptp_caps = {
 	.owner		= THIS_MODULE,
 	.name		= "tg3 clock",
@@ -6331,20 +6363,13 @@ static const struct ptp_clock_info tg3_ptp_caps = {
 	.n_per_out	= 1,
 	.n_pins		= 0,
 	.pps		= 0,
-	.adjfreq	= tg3_ptp_adjfreq,
+	.adjfine	= tg3_ptp_adjfine,
 	.adjtime	= tg3_ptp_adjtime,
+	.do_aux_work	= tg3_ptp_ts_aux_work,
 	.gettimex64	= tg3_ptp_gettimex,
 	.settime64	= tg3_ptp_settime,
 	.enable		= tg3_ptp_enable,
 };
-
-static void tg3_hwclock_to_timestamp(struct tg3 *tp, u64 hwclock,
-				     struct skb_shared_hwtstamps *timestamp)
-{
-	memset(timestamp, 0, sizeof(struct skb_shared_hwtstamps));
-	timestamp->hwtstamp  = ns_to_ktime((hwclock & TG3_TSTAMP_MASK) +
-					   tp->ptp_adjust);
-}
 
 /* tp->lock must be held */
 static void tg3_ptp_init(struct tg3 *tp)
@@ -6376,6 +6401,8 @@ static void tg3_ptp_fini(struct tg3 *tp)
 	ptp_clock_unregister(tp->ptp_clock);
 	tp->ptp_clock = NULL;
 	tp->ptp_adjust = 0;
+	dev_consume_skb_any(tp->tx_tstamp_skb);
+	tp->tx_tstamp_skb = NULL;
 }
 
 static inline int tg3_irq_sync(struct tg3 *tp)
@@ -6546,6 +6573,7 @@ static void tg3_tx(struct tg3_napi *tnapi)
 
 	while (sw_idx != hw_idx) {
 		struct tg3_tx_ring_info *ri = &tnapi->tx_buffers[sw_idx];
+		bool complete_skb_later = false;
 		struct sk_buff *skb = ri->skb;
 		int i, tx_bug = 0;
 
@@ -6556,12 +6584,17 @@ static void tg3_tx(struct tg3_napi *tnapi)
 
 		if (tnapi->tx_ring[sw_idx].len_flags & TXD_FLAG_HWTSTAMP) {
 			struct skb_shared_hwtstamps timestamp;
-			u64 hwclock = tr32(TG3_TX_TSTAMP_LSB);
-			hwclock |= (u64)tr32(TG3_TX_TSTAMP_MSB) << 32;
+			u64 hwclock;
 
-			tg3_hwclock_to_timestamp(tp, hwclock, &timestamp);
-
-			skb_tstamp_tx(skb, &timestamp);
+			tg3_read_tx_tstamp(tp, &hwclock);
+			if (hwclock != tp->pre_tx_ts) {
+				tg3_hwclock_to_timestamp(tp, hwclock, &timestamp);
+				skb_tstamp_tx(skb, &timestamp);
+				tp->pre_tx_ts = 0;
+			} else {
+				tp->tx_tstamp_skb = skb;
+				complete_skb_later = true;
+			}
 		}
 
 		dma_unmap_single(&tp->pdev->dev, dma_unmap_addr(ri, mapping),
@@ -6599,7 +6632,10 @@ static void tg3_tx(struct tg3_napi *tnapi)
 		pkts_compl++;
 		bytes_compl += skb->len;
 
-		dev_consume_skb_any(skb);
+		if (!complete_skb_later)
+			dev_consume_skb_any(skb);
+		else
+			ptp_schedule_worker(tp->ptp_clock, 0);
 
 		if (unlikely(tx_bug)) {
 			tg3_tx_recover(tp);
@@ -6611,9 +6647,9 @@ static void tg3_tx(struct tg3_napi *tnapi)
 
 	tnapi->tx_cons = sw_idx;
 
-	/* Need to make the tx_cons update visible to tg3_start_xmit()
+	/* Need to make the tx_cons update visible to __tg3_start_xmit()
 	 * before checking for netif_queue_stopped().  Without the
-	 * memory barrier, there is a small possibility that tg3_start_xmit()
+	 * memory barrier, there is a small possibility that __tg3_start_xmit()
 	 * will miss it and cause the queue to be stopped forever.
 	 */
 	smp_mb();
@@ -6853,7 +6889,7 @@ static int tg3_rx(struct tg3_napi *tnapi, int budget)
 				       desc_idx, *post_ptr);
 		drop_it_no_recycle:
 			/* Other statistics kept track of by card. */
-			tp->rx_dropped++;
+			tnapi->rx_dropped++;
 			goto next_pkt;
 		}
 
@@ -6888,7 +6924,10 @@ static int tg3_rx(struct tg3_napi *tnapi, int budget)
 
 			ri->data = NULL;
 
-			skb = build_skb(data, frag_size);
+			if (frag_size)
+				skb = build_skb(data, frag_size);
+			else
+				skb = slab_build_skb(data);
 			if (!skb) {
 				tg3_frag_free(frag_size != 0, data);
 				goto drop_it_no_recycle;
@@ -7381,9 +7420,9 @@ static void tg3_napi_init(struct tg3 *tp)
 {
 	int i;
 
-	netif_napi_add(tp->dev, &tp->napi[0].napi, tg3_poll, 64);
+	netif_napi_add(tp->dev, &tp->napi[0].napi, tg3_poll);
 	for (i = 1; i < tp->irq_cnt; i++)
-		netif_napi_add(tp->dev, &tp->napi[i].napi, tg3_poll_msix, 64);
+		netif_napi_add(tp->dev, &tp->napi[i].napi, tg3_poll_msix);
 }
 
 static void tg3_napi_fini(struct tg3 *tp)
@@ -7850,7 +7889,7 @@ static bool tg3_tso_bug_gso_check(struct tg3_napi *tnapi, struct sk_buff *skb)
 	return skb_shinfo(skb)->gso_segs < tnapi->tx_pending / 3;
 }
 
-static netdev_tx_t tg3_start_xmit(struct sk_buff *, struct net_device *);
+static netdev_tx_t __tg3_start_xmit(struct sk_buff *, struct net_device *);
 
 /* Use GSO to workaround all TSO packets that meet HW bug conditions
  * indicated in tg3_tx_frag_set()
@@ -7879,12 +7918,14 @@ static int tg3_tso_bug(struct tg3 *tp, struct tg3_napi *tnapi,
 
 	segs = skb_gso_segment(skb, tp->dev->features &
 				    ~(NETIF_F_TSO | NETIF_F_TSO6));
-	if (IS_ERR(segs) || !segs)
+	if (IS_ERR(segs) || !segs) {
+		tnapi->tx_dropped++;
 		goto tg3_tso_bug_end;
+	}
 
 	skb_list_walk_safe(segs, seg, next) {
 		skb_mark_not_on_list(seg);
-		tg3_start_xmit(seg, tp->dev);
+		__tg3_start_xmit(seg, tp->dev);
 	}
 
 tg3_tso_bug_end:
@@ -7894,7 +7935,7 @@ tg3_tso_bug_end:
 }
 
 /* hard_start_xmit for all devices */
-static netdev_tx_t tg3_start_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t __tg3_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct tg3 *tp = netdev_priv(dev);
 	u32 len, entry, base_flags, mss, vlan = 0;
@@ -7945,7 +7986,7 @@ static netdev_tx_t tg3_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		iph = ip_hdr(skb);
 		tcp_opt_len = tcp_optlen(skb);
 
-		hdr_len = skb_transport_offset(skb) + tcp_hdrlen(skb) - ETH_HLEN;
+		hdr_len = skb_tcp_all_headers(skb) - ETH_HLEN;
 
 		/* HW/FW can not correctly segment packets that have been
 		 * vlan encapsulated.
@@ -8033,8 +8074,13 @@ static netdev_tx_t tg3_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	if ((unlikely(skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP)) &&
 	    tg3_flag(tp, TX_TSTAMP_EN)) {
-		skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
-		base_flags |= TXD_FLAG_HWTSTAMP;
+		tg3_full_lock(tp, 0);
+		if (!tp->pre_tx_ts) {
+			skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+			base_flags |= TXD_FLAG_HWTSTAMP;
+			tg3_read_tx_tstamp(tp, &tp->pre_tx_ts);
+		}
+		tg3_full_unlock(tp);
 	}
 
 	len = skb_headlen(skb);
@@ -8138,11 +8184,6 @@ static netdev_tx_t tg3_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			netif_tx_wake_queue(txq);
 	}
 
-	if (!netdev_xmit_more() || netif_xmit_stopped(txq)) {
-		/* Packets are ready, update Tx producer idx on card. */
-		tw32_tx_mbox(tnapi->prodmbox, entry);
-	}
-
 	return NETDEV_TX_OK;
 
 dma_error:
@@ -8151,8 +8192,44 @@ dma_error:
 drop:
 	dev_kfree_skb_any(skb);
 drop_nofree:
-	tp->tx_dropped++;
+	tnapi->tx_dropped++;
 	return NETDEV_TX_OK;
+}
+
+static netdev_tx_t tg3_start_xmit(struct sk_buff *skb, struct net_device *dev)
+{
+	struct netdev_queue *txq;
+	u16 skb_queue_mapping;
+	netdev_tx_t ret;
+
+	skb_queue_mapping = skb_get_queue_mapping(skb);
+	txq = netdev_get_tx_queue(dev, skb_queue_mapping);
+
+	ret = __tg3_start_xmit(skb, dev);
+
+	/* Notify the hardware that packets are ready by updating the TX ring
+	 * tail pointer. We respect netdev_xmit_more() thus avoiding poking
+	 * the hardware for every packet. To guarantee forward progress the TX
+	 * ring must be drained when it is full as indicated by
+	 * netif_xmit_stopped(). This needs to happen even when the current
+	 * skb was dropped or rejected with NETDEV_TX_BUSY. Otherwise packets
+	 * queued by previous __tg3_start_xmit() calls might get stuck in
+	 * the queue forever.
+	 */
+	if (!netdev_xmit_more() || netif_xmit_stopped(txq)) {
+		struct tg3_napi *tnapi;
+		struct tg3 *tp;
+
+		tp = netdev_priv(dev);
+		tnapi = &tp->napi[skb_queue_mapping];
+
+		if (tg3_flag(tp, ENABLE_TSS))
+			tnapi++;
+
+		tw32_tx_mbox(tnapi->prodmbox, tnapi->tx_prod);
+	}
+
+	return ret;
 }
 
 static void tg3_mac_loopback(struct tg3 *tp, bool enable)
@@ -9330,7 +9407,7 @@ static void __tg3_set_rx_mode(struct net_device *);
 /* tp->lock is held. */
 static int tg3_halt(struct tg3 *tp, int kind, bool silent)
 {
-	int err;
+	int err, i;
 
 	tg3_stop_fw(tp);
 
@@ -9351,6 +9428,13 @@ static int tg3_halt(struct tg3 *tp, int kind, bool silent)
 
 		/* And make sure the next sample is new data */
 		memset(tp->hw_stats, 0, sizeof(struct tg3_hw_stats));
+
+		for (i = 0; i < TG3_IRQ_MAX_VECS; ++i) {
+			struct tg3_napi *tnapi = &tp->napi[i];
+
+			tnapi->rx_dropped = 0;
+			tnapi->tx_dropped = 0;
+		}
 	}
 
 	return err;
@@ -9366,7 +9450,7 @@ static int tg3_set_mac_addr(struct net_device *dev, void *p)
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
-	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
+	eth_hw_addr_set(dev, addr->sa_data);
 
 	if (!netif_running(dev))
 		return 0;
@@ -10273,8 +10357,7 @@ static int tg3_reset_hw(struct tg3 *tp, bool reset_phy)
 
 	if (tg3_asic_rev(tp) == ASIC_REV_5705 &&
 	    tg3_chip_rev_id(tp) != CHIPREV_ID_5705_A0) {
-		if (tg3_flag(tp, TSO_CAPABLE) &&
-		    tg3_asic_rev(tp) == ASIC_REV_5705) {
+		if (tg3_flag(tp, TSO_CAPABLE)) {
 			rdmac_mode |= RDMAC_MODE_FIFO_SIZE_128;
 		} else if (!(tr32(TG3PCI_PCISTATE) & PCISTATE_BUS_SPEED_HIGH) &&
 			   !tg3_flag(tp, IS_5788)) {
@@ -11176,7 +11259,7 @@ static void tg3_reset_task(struct work_struct *work)
 	rtnl_lock();
 	tg3_full_lock(tp, 0);
 
-	if (!netif_running(tp->dev)) {
+	if (tp->pcierr_recovery || !netif_running(tp->dev)) {
 		tg3_flag_clear(tp, RESET_TASK_PENDING);
 		tg3_full_unlock(tp);
 		rtnl_unlock();
@@ -11213,12 +11296,8 @@ static void tg3_reset_task(struct work_struct *work)
 	}
 
 	tg3_netif_start(tp);
-
 	tg3_full_unlock(tp);
-
-	if (!err)
-		tg3_phy_start(tp);
-
+	tg3_phy_start(tp);
 	tg3_flag_clear(tp, RESET_TASK_PENDING);
 out:
 	rtnl_unlock();
@@ -11905,6 +11984,9 @@ static void tg3_get_nstats(struct tg3 *tp, struct rtnl_link_stats64 *stats)
 {
 	struct rtnl_link_stats64 *old_stats = &tp->net_stats_prev;
 	struct tg3_hw_stats *hw_stats = tp->hw_stats;
+	unsigned long rx_dropped;
+	unsigned long tx_dropped;
+	int i;
 
 	stats->rx_packets = old_stats->rx_packets +
 		get_stat64(&hw_stats->rx_ucast_packets) +
@@ -11951,8 +12033,26 @@ static void tg3_get_nstats(struct tg3 *tp, struct rtnl_link_stats64 *stats)
 	stats->rx_missed_errors = old_stats->rx_missed_errors +
 		get_stat64(&hw_stats->rx_discards);
 
-	stats->rx_dropped = tp->rx_dropped;
-	stats->tx_dropped = tp->tx_dropped;
+	/* Aggregate per-queue counters. The per-queue counters are updated
+	 * by a single writer, race-free. The result computed by this loop
+	 * might not be 100% accurate (counters can be updated in the middle of
+	 * the loop) but the next tg3_get_nstats() will recompute the current
+	 * value so it is acceptable.
+	 *
+	 * Note that these counters wrap around at 4G on 32bit machines.
+	 */
+	rx_dropped = (unsigned long)(old_stats->rx_dropped);
+	tx_dropped = (unsigned long)(old_stats->tx_dropped);
+
+	for (i = 0; i < tp->irq_cnt; i++) {
+		struct tg3_napi *tnapi = &tp->napi[i];
+
+		rx_dropped += tnapi->rx_dropped;
+		tx_dropped += tnapi->tx_dropped;
+	}
+
+	stats->rx_dropped = rx_dropped;
+	stats->tx_dropped = tx_dropped;
 }
 
 static int tg3_get_regs_len(struct net_device *dev)
@@ -12308,9 +12408,9 @@ static void tg3_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info
 {
 	struct tg3 *tp = netdev_priv(dev);
 
-	strlcpy(info->driver, DRV_MODULE_NAME, sizeof(info->driver));
-	strlcpy(info->fw_version, tp->fw_ver, sizeof(info->fw_version));
-	strlcpy(info->bus_info, pci_name(tp->pdev), sizeof(info->bus_info));
+	strscpy(info->driver, DRV_MODULE_NAME, sizeof(info->driver));
+	strscpy(info->fw_version, tp->fw_ver, sizeof(info->fw_version));
+	strscpy(info->bus_info, pci_name(tp->pdev), sizeof(info->bus_info));
 }
 
 static void tg3_get_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
@@ -12396,7 +12496,10 @@ static int tg3_nway_reset(struct net_device *dev)
 	return r;
 }
 
-static void tg3_get_ringparam(struct net_device *dev, struct ethtool_ringparam *ering)
+static void tg3_get_ringparam(struct net_device *dev,
+			      struct ethtool_ringparam *ering,
+			      struct kernel_ethtool_ringparam *kernel_ering,
+			      struct netlink_ext_ack *extack)
 {
 	struct tg3 *tp = netdev_priv(dev);
 
@@ -12417,7 +12520,10 @@ static void tg3_get_ringparam(struct net_device *dev, struct ethtool_ringparam *
 	ering->tx_pending = tp->napi[0].tx_pending;
 }
 
-static int tg3_set_ringparam(struct net_device *dev, struct ethtool_ringparam *ering)
+static int tg3_set_ringparam(struct net_device *dev,
+			     struct ethtool_ringparam *ering,
+			     struct kernel_ethtool_ringparam *kernel_ering,
+			     struct netlink_ext_ack *extack)
 {
 	struct tg3 *tp = netdev_priv(dev);
 	int i, irq_sync = 0, err = 0;
@@ -13805,9 +13911,6 @@ static int tg3_hwtstamp_set(struct net_device *dev, struct ifreq *ifr)
 
 	if (copy_from_user(&stmpconf, ifr->ifr_data, sizeof(stmpconf)))
 		return -EFAULT;
-
-	if (stmpconf.flags)
-		return -EINVAL;
 
 	if (stmpconf.tx_type != HWTSTAMP_TX_ON &&
 	    stmpconf.tx_type != HWTSTAMP_TX_OFF)
@@ -16915,19 +17018,18 @@ static int tg3_get_invariants(struct tg3 *tp, const struct pci_device_id *ent)
 	return err;
 }
 
-static int tg3_get_device_address(struct tg3 *tp)
+static int tg3_get_device_address(struct tg3 *tp, u8 *addr)
 {
-	struct net_device *dev = tp->dev;
 	u32 hi, lo, mac_offset;
 	int addr_ok = 0;
 	int err;
 
-	if (!eth_platform_get_mac_address(&tp->pdev->dev, dev->dev_addr))
+	if (!eth_platform_get_mac_address(&tp->pdev->dev, addr))
 		return 0;
 
 	if (tg3_flag(tp, IS_SSB_CORE)) {
-		err = ssb_gige_get_macaddr(tp->pdev, &dev->dev_addr[0]);
-		if (!err && is_valid_ether_addr(&dev->dev_addr[0]))
+		err = ssb_gige_get_macaddr(tp->pdev, addr);
+		if (!err && is_valid_ether_addr(addr))
 			return 0;
 	}
 
@@ -16951,41 +17053,41 @@ static int tg3_get_device_address(struct tg3 *tp)
 	/* First try to get it from MAC address mailbox. */
 	tg3_read_mem(tp, NIC_SRAM_MAC_ADDR_HIGH_MBOX, &hi);
 	if ((hi >> 16) == 0x484b) {
-		dev->dev_addr[0] = (hi >>  8) & 0xff;
-		dev->dev_addr[1] = (hi >>  0) & 0xff;
+		addr[0] = (hi >>  8) & 0xff;
+		addr[1] = (hi >>  0) & 0xff;
 
 		tg3_read_mem(tp, NIC_SRAM_MAC_ADDR_LOW_MBOX, &lo);
-		dev->dev_addr[2] = (lo >> 24) & 0xff;
-		dev->dev_addr[3] = (lo >> 16) & 0xff;
-		dev->dev_addr[4] = (lo >>  8) & 0xff;
-		dev->dev_addr[5] = (lo >>  0) & 0xff;
+		addr[2] = (lo >> 24) & 0xff;
+		addr[3] = (lo >> 16) & 0xff;
+		addr[4] = (lo >>  8) & 0xff;
+		addr[5] = (lo >>  0) & 0xff;
 
 		/* Some old bootcode may report a 0 MAC address in SRAM */
-		addr_ok = is_valid_ether_addr(&dev->dev_addr[0]);
+		addr_ok = is_valid_ether_addr(addr);
 	}
 	if (!addr_ok) {
 		/* Next, try NVRAM. */
 		if (!tg3_flag(tp, NO_NVRAM) &&
 		    !tg3_nvram_read_be32(tp, mac_offset + 0, &hi) &&
 		    !tg3_nvram_read_be32(tp, mac_offset + 4, &lo)) {
-			memcpy(&dev->dev_addr[0], ((char *)&hi) + 2, 2);
-			memcpy(&dev->dev_addr[2], (char *)&lo, sizeof(lo));
+			memcpy(&addr[0], ((char *)&hi) + 2, 2);
+			memcpy(&addr[2], (char *)&lo, sizeof(lo));
 		}
 		/* Finally just fetch it out of the MAC control regs. */
 		else {
 			hi = tr32(MAC_ADDR_0_HIGH);
 			lo = tr32(MAC_ADDR_0_LOW);
 
-			dev->dev_addr[5] = lo & 0xff;
-			dev->dev_addr[4] = (lo >> 8) & 0xff;
-			dev->dev_addr[3] = (lo >> 16) & 0xff;
-			dev->dev_addr[2] = (lo >> 24) & 0xff;
-			dev->dev_addr[1] = hi & 0xff;
-			dev->dev_addr[0] = (hi >> 8) & 0xff;
+			addr[5] = lo & 0xff;
+			addr[4] = (lo >> 8) & 0xff;
+			addr[3] = (lo >> 16) & 0xff;
+			addr[2] = (lo >> 24) & 0xff;
+			addr[1] = hi & 0xff;
+			addr[0] = (hi >> 8) & 0xff;
 		}
 	}
 
-	if (!is_valid_ether_addr(&dev->dev_addr[0]))
+	if (!is_valid_ether_addr(addr))
 		return -EINVAL;
 	return 0;
 }
@@ -17013,7 +17115,7 @@ static u32 tg3_calc_dma_bndry(struct tg3 *tp, u32 val)
 	    !tg3_flag(tp, PCI_EXPRESS))
 		goto out;
 
-#if defined(CONFIG_PPC64) || defined(CONFIG_IA64) || defined(CONFIG_PARISC)
+#if defined(CONFIG_PPC64) || defined(CONFIG_PARISC)
 	goal = BOUNDARY_MULTI_CACHELINE;
 #else
 #if defined(CONFIG_SPARC64) || defined(CONFIG_ALPHA)
@@ -17561,6 +17663,7 @@ static int tg3_init_one(struct pci_dev *pdev,
 	char str[40];
 	u64 dma_mask, persist_dma_mask;
 	netdev_features_t features = 0;
+	u8 addr[ETH_ALEN] __aligned(2);
 
 	err = pci_enable_device(pdev);
 	if (err) {
@@ -17687,7 +17790,7 @@ static int tg3_init_one(struct pci_dev *pdev,
 	 * device behind the EPB cannot support DMA addresses > 40-bit.
 	 * On 64-bit systems with IOMMU, use 40-bit dma_mask.
 	 * On 64-bit systems without IOMMU, use 64-bit dma_mask and
-	 * do DMA address check in tg3_start_xmit().
+	 * do DMA address check in __tg3_start_xmit().
 	 */
 	if (tg3_flag(tp, IS_5788))
 		persist_dma_mask = dma_mask = DMA_BIT_MASK(32);
@@ -17783,12 +17886,13 @@ static int tg3_init_one(struct pci_dev *pdev,
 		tp->rx_pending = 63;
 	}
 
-	err = tg3_get_device_address(tp);
+	err = tg3_get_device_address(tp, addr);
 	if (err) {
 		dev_err(&pdev->dev,
 			"Could not obtain valid ethernet address, aborting\n");
 		goto err_out_apeunmap;
 	}
+	eth_hw_addr_set(dev, addr);
 
 	intmbx = MAILBOX_INTERRUPT_0 + TG3_64BIT_REG_LOW;
 	rcvmbx = MAILBOX_RCVRET_CON_IDX_0 + TG3_64BIT_REG_LOW;
@@ -17800,10 +17904,7 @@ static int tg3_init_one(struct pci_dev *pdev,
 		tnapi->tx_pending = TG3_DEF_TX_RING_PENDING;
 
 		tnapi->int_mbox = intmbx;
-		if (i <= 4)
-			intmbx += 0x8;
-		else
-			intmbx += 0x4;
+		intmbx += 0x8;
 
 		tnapi->consmbox = rcvmbx;
 		tnapi->prodmbox = sndmbx;
@@ -18078,7 +18179,10 @@ static void tg3_shutdown(struct pci_dev *pdev)
 	struct net_device *dev = pci_get_drvdata(pdev);
 	struct tg3 *tp = netdev_priv(dev);
 
+	tg3_reset_task_cancel(tp);
+
 	rtnl_lock();
+
 	netif_device_detach(dev);
 
 	if (netif_running(dev))
@@ -18088,6 +18192,8 @@ static void tg3_shutdown(struct pci_dev *pdev)
 		tg3_power_down(tp);
 
 	rtnl_unlock();
+
+	pci_disable_device(pdev);
 }
 
 /**
@@ -18107,6 +18213,9 @@ static pci_ers_result_t tg3_io_error_detected(struct pci_dev *pdev,
 
 	netdev_info(netdev, "PCI I/O error detected\n");
 
+	/* Want to make sure that the reset task doesn't run */
+	tg3_reset_task_cancel(tp);
+
 	rtnl_lock();
 
 	/* Could be second call or maybe we don't have netdev yet */
@@ -18122,9 +18231,6 @@ static pci_ers_result_t tg3_io_error_detected(struct pci_dev *pdev,
 	tg3_netif_stop(tp);
 
 	tg3_timer_stop(tp);
-
-	/* Want to make sure that the reset task doesn't run */
-	tg3_reset_task_cancel(tp);
 
 	netif_device_detach(netdev);
 

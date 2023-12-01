@@ -24,8 +24,8 @@
  */
 
 #include "hw_sequencer_private.h"
-#include "dce110/dce110_hw_sequencer.h"
-#include "dcn10_hw_sequencer.h"
+#include "dce110/dce110_hwseq.h"
+#include "dcn10/dcn10_hwseq.h"
 #include "dcn20/dcn20_hwseq.h"
 
 static const struct hw_sequencer_funcs dcn10_funcs = {
@@ -78,9 +78,14 @@ static const struct hw_sequencer_funcs dcn10_funcs = {
 	.get_clock = dcn10_get_clock,
 	.get_vupdate_offset_from_vsync = dcn10_get_vupdate_offset_from_vsync,
 	.calc_vupdate_position = dcn10_calc_vupdate_position,
+	.power_down = dce110_power_down,
 	.set_backlight_level = dce110_set_backlight_level,
 	.set_abm_immediate_disable = dce110_set_abm_immediate_disable,
 	.set_pipe = dce110_set_pipe,
+	.enable_lvds_link_output = dce110_enable_lvds_link_output,
+	.enable_tmds_link_output = dce110_enable_tmds_link_output,
+	.enable_dp_link_output = dce110_enable_dp_link_output,
+	.disable_link_output = dce110_disable_link_output,
 	.get_dcc_en_bits = dcn10_get_dcc_en_bits,
 	.update_visual_confirm_color = dcn10_update_visual_confirm_color,
 };

@@ -25,6 +25,7 @@
 #include <linux/fcntl.h>
 #include <linux/memcontrol.h>
 #include <linux/watch_queue.h>
+#include <linux/sysctl.h>
 
 #include <linux/uaccess.h>
 #include <asm/ioctls.h>
@@ -50,13 +51,13 @@
  * The max size that a non-root user is allowed to grow the pipe. Can
  * be set by root in /proc/sys/fs/pipe-max-size
  */
-unsigned int pipe_max_size = 1048576;
+static unsigned int pipe_max_size = 1048576;
 
 /* Maximum allocatable pages per user. Hard limit is unset by default, soft
  * matches default values.
  */
-unsigned long pipe_user_pages_hard;
-unsigned long pipe_user_pages_soft = PIPE_DEF_BUFFERS * INR_OPEN_CUR;
+static unsigned long pipe_user_pages_hard;
+static unsigned long pipe_user_pages_soft = PIPE_DEF_BUFFERS * INR_OPEN_CUR;
 
 /*
  * We use head and tail indices that aren't masked off, except at the point of
@@ -226,6 +227,36 @@ static inline bool pipe_readable(const struct pipe_inode_info *pipe)
 	return !pipe_empty(head, tail) || !writers;
 }
 
+static inline unsigned int pipe_update_tail(struct pipe_inode_info *pipe,
+					    struct pipe_buffer *buf,
+					    unsigned int tail)
+{
+	pipe_buf_release(pipe, buf);
+
+	/*
+	 * If the pipe has a watch_queue, we need additional protection
+	 * by the spinlock because notifications get posted with only
+	 * this spinlock, no mutex
+	 */
+	if (pipe_has_watch_queue(pipe)) {
+		spin_lock_irq(&pipe->rd_wait.lock);
+#ifdef CONFIG_WATCH_QUEUE
+		if (buf->flags & PIPE_BUF_FLAG_LOSS)
+			pipe->note_loss = true;
+#endif
+		pipe->tail = ++tail;
+		spin_unlock_irq(&pipe->rd_wait.lock);
+		return tail;
+	}
+
+	/*
+	 * Without a watch_queue, we can simply increment the tail
+	 * without the spinlock - the mutex is enough.
+	 */
+	pipe->tail = ++tail;
+	return tail;
+}
+
 static ssize_t
 pipe_read(struct kiocb *iocb, struct iov_iter *to)
 {
@@ -252,7 +283,8 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 	 */
 	was_full = pipe_full(pipe->head, pipe->tail, pipe->max_usage);
 	for (;;) {
-		unsigned int head = pipe->head;
+		/* Read ->head with a barrier vs post_one_notification() */
+		unsigned int head = smp_load_acquire(&pipe->head);
 		unsigned int tail = pipe->tail;
 		unsigned int mask = pipe->ring_size - 1;
 
@@ -318,17 +350,8 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 				buf->len = 0;
 			}
 
-			if (!buf->len) {
-				pipe_buf_release(pipe, buf);
-				spin_lock_irq(&pipe->rd_wait.lock);
-#ifdef CONFIG_WATCH_QUEUE
-				if (buf->flags & PIPE_BUF_FLAG_LOSS)
-					pipe->note_loss = true;
-#endif
-				tail++;
-				pipe->tail = tail;
-				spin_unlock_irq(&pipe->rd_wait.lock);
-			}
+			if (!buf->len)
+				tail = pipe_update_tail(pipe, buf, tail);
 			total_len -= chars;
 			if (!total_len)
 				break;	/* common path: read succeeded */
@@ -340,7 +363,8 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 			break;
 		if (ret)
 			break;
-		if (filp->f_flags & O_NONBLOCK) {
+		if ((filp->f_flags & O_NONBLOCK) ||
+		    (iocb->ki_flags & IOCB_NOWAIT)) {
 			ret = -EAGAIN;
 			break;
 		}
@@ -434,12 +458,10 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		goto out;
 	}
 
-#ifdef CONFIG_WATCH_QUEUE
-	if (pipe->watch_queue) {
+	if (pipe_has_watch_queue(pipe)) {
 		ret = -EXDEV;
 		goto out;
 	}
-#endif
 
 	/*
 	 * If it wasn't empty we try to merge new data into
@@ -486,7 +508,7 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		head = pipe->head;
 		if (!pipe_full(head, pipe->tail, pipe->max_usage)) {
 			unsigned int mask = pipe->ring_size - 1;
-			struct pipe_buffer *buf = &pipe->bufs[head & mask];
+			struct pipe_buffer *buf;
 			struct page *page = pipe->tmp_page;
 			int copied;
 
@@ -504,16 +526,7 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 			 * it, either the reader will consume it or it'll still
 			 * be there for the next write.
 			 */
-			spin_lock_irq(&pipe->rd_wait.lock);
-
-			head = pipe->head;
-			if (pipe_full(head, pipe->tail, pipe->max_usage)) {
-				spin_unlock_irq(&pipe->rd_wait.lock);
-				continue;
-			}
-
 			pipe->head = head + 1;
-			spin_unlock_irq(&pipe->rd_wait.lock);
 
 			/* Insert it into the buffer array */
 			buf = &pipe->bufs[head & mask];
@@ -534,7 +547,6 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 				break;
 			}
 			ret += copied;
-			buf->offset = 0;
 			buf->len = copied;
 
 			if (!iov_iter_count(from))
@@ -545,7 +557,8 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 			continue;
 
 		/* Wait for buffer space to become available. */
-		if (filp->f_flags & O_NONBLOCK) {
+		if ((filp->f_flags & O_NONBLOCK) ||
+		    (iocb->ki_flags & IOCB_NOWAIT)) {
 			if (!ret)
 				ret = -EAGAIN;
 			break;
@@ -605,7 +618,7 @@ out:
 static long pipe_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct pipe_inode_info *pipe = filp->private_data;
-	int count, head, tail, mask;
+	unsigned int count, head, tail, mask;
 
 	switch (cmd) {
 	case FIONREAD:
@@ -651,7 +664,7 @@ pipe_poll(struct file *filp, poll_table *wait)
 	unsigned int head, tail;
 
 	/* Epoll has some historical nasty semantics, this enables them */
-	pipe->poll_usage = 1;
+	WRITE_ONCE(pipe->poll_usage, true);
 
 	/*
 	 * Reading pipe state only -- no need for acquiring the semaphore.
@@ -827,13 +840,11 @@ out_free_uid:
 
 void free_pipe_info(struct pipe_inode_info *pipe)
 {
-	int i;
+	unsigned int i;
 
 #ifdef CONFIG_WATCH_QUEUE
-	if (pipe->watch_queue) {
+	if (pipe->watch_queue)
 		watch_queue_clear(pipe->watch_queue);
-		put_watch_queue(pipe->watch_queue);
-	}
 #endif
 
 	(void) account_pipe_buffers(pipe->user, pipe->nr_accounted, 0);
@@ -843,20 +854,24 @@ void free_pipe_info(struct pipe_inode_info *pipe)
 		if (buf->ops)
 			pipe_buf_release(pipe, buf);
 	}
+#ifdef CONFIG_WATCH_QUEUE
+	if (pipe->watch_queue)
+		put_watch_queue(pipe->watch_queue);
+#endif
 	if (pipe->tmp_page)
 		__free_page(pipe->tmp_page);
 	kfree(pipe->bufs);
 	kfree(pipe);
 }
 
-static struct vfsmount *pipe_mnt __read_mostly;
+static struct vfsmount *pipe_mnt __ro_after_init;
 
 /*
  * pipefs_dname() is called from d_path().
  */
 static char *pipefs_dname(struct dentry *dentry, char *buffer, int buflen)
 {
-	return dynamic_dname(dentry, buffer, buflen, "pipe:[%lu]",
+	return dynamic_dname(buffer, buflen, "pipe:[%lu]",
 				d_inode(dentry)->i_ino);
 }
 
@@ -893,7 +908,7 @@ static struct inode * get_pipe_inode(void)
 	inode->i_mode = S_IFIFO | S_IRUSR | S_IWUSR;
 	inode->i_uid = current_fsuid();
 	inode->i_gid = current_fsgid();
-	inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
+	simple_inode_init_ts(inode);
 
 	return inode;
 
@@ -972,6 +987,9 @@ static int __do_pipe_flags(int *fd, struct file **files, int flags)
 	audit_fd_pair(fdr, fdw);
 	fd[0] = fdr;
 	fd[1] = fdw;
+	/* pipe groks IOCB_NOWAIT */
+	files[0]->f_mode |= FMODE_NOWAIT;
+	files[1]->f_mode |= FMODE_NOWAIT;
 	return 0;
 
  err_fdr:
@@ -1227,7 +1245,7 @@ const struct file_operations pipefifo_fops = {
  * Currently we rely on the pipe array holding a power-of-2 number
  * of pages. Returns 0 on error.
  */
-unsigned int round_pipe_size(unsigned long size)
+unsigned int round_pipe_size(unsigned int size)
 {
 	if (size > (1U << 31))
 		return 0;
@@ -1241,29 +1259,32 @@ unsigned int round_pipe_size(unsigned long size)
 
 /*
  * Resize the pipe ring to a number of slots.
+ *
+ * Note the pipe can be reduced in capacity, but only if the current
+ * occupancy doesn't exceed nr_slots; if it does, EBUSY will be
+ * returned instead.
  */
 int pipe_resize_ring(struct pipe_inode_info *pipe, unsigned int nr_slots)
 {
 	struct pipe_buffer *bufs;
 	unsigned int head, tail, mask, n;
 
-	/*
-	 * We can shrink the pipe, if arg is greater than the ring occupancy.
-	 * Since we don't expect a lot of shrink+grow operations, just free and
-	 * allocate again like we would do for growing.  If the pipe currently
-	 * contains more buffers than arg, then return busy.
-	 */
-	mask = pipe->ring_size - 1;
-	head = pipe->head;
-	tail = pipe->tail;
-	n = pipe_occupancy(pipe->head, pipe->tail);
-	if (nr_slots < n)
-		return -EBUSY;
-
 	bufs = kcalloc(nr_slots, sizeof(*bufs),
 		       GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
 	if (unlikely(!bufs))
 		return -ENOMEM;
+
+	spin_lock_irq(&pipe->rd_wait.lock);
+	mask = pipe->ring_size - 1;
+	head = pipe->head;
+	tail = pipe->tail;
+
+	n = pipe_occupancy(head, tail);
+	if (nr_slots < n) {
+		spin_unlock_irq(&pipe->rd_wait.lock);
+		kfree(bufs);
+		return -EBUSY;
+	}
 
 	/*
 	 * The pipe array wraps around, so just start the new one at zero
@@ -1296,6 +1317,8 @@ int pipe_resize_ring(struct pipe_inode_info *pipe, unsigned int nr_slots)
 	pipe->tail = tail;
 	pipe->head = head;
 
+	spin_unlock_irq(&pipe->rd_wait.lock);
+
 	/* This might have made more room for writers */
 	wake_up_interruptible(&pipe->wr_wait);
 	return 0;
@@ -1305,16 +1328,14 @@ int pipe_resize_ring(struct pipe_inode_info *pipe, unsigned int nr_slots)
  * Allocate a new array of pipe buffers and copy the info over. Returns the
  * pipe size if successful, or return -ERROR on error.
  */
-static long pipe_set_size(struct pipe_inode_info *pipe, unsigned long arg)
+static long pipe_set_size(struct pipe_inode_info *pipe, unsigned int arg)
 {
 	unsigned long user_bufs;
 	unsigned int nr_slots, size;
 	long ret = 0;
 
-#ifdef CONFIG_WATCH_QUEUE
-	if (pipe->watch_queue)
+	if (pipe_has_watch_queue(pipe))
 		return -EBUSY;
-#endif
 
 	size = round_pipe_size(arg);
 	nr_slots = size >> PAGE_SHIFT;
@@ -1366,14 +1387,12 @@ struct pipe_inode_info *get_pipe_info(struct file *file, bool for_splice)
 
 	if (file->f_op != &pipefifo_fops || !pipe)
 		return NULL;
-#ifdef CONFIG_WATCH_QUEUE
-	if (for_splice && pipe->watch_queue)
+	if (for_splice && pipe_has_watch_queue(pipe))
 		return NULL;
-#endif
 	return pipe;
 }
 
-long pipe_fcntl(struct file *file, unsigned int cmd, unsigned long arg)
+long pipe_fcntl(struct file *file, unsigned int cmd, unsigned int arg)
 {
 	struct pipe_inode_info *pipe;
 	long ret;
@@ -1428,6 +1447,60 @@ static struct file_system_type pipe_fs_type = {
 	.kill_sb	= kill_anon_super,
 };
 
+#ifdef CONFIG_SYSCTL
+static int do_proc_dopipe_max_size_conv(unsigned long *lvalp,
+					unsigned int *valp,
+					int write, void *data)
+{
+	if (write) {
+		unsigned int val;
+
+		val = round_pipe_size(*lvalp);
+		if (val == 0)
+			return -EINVAL;
+
+		*valp = val;
+	} else {
+		unsigned int val = *valp;
+		*lvalp = (unsigned long) val;
+	}
+
+	return 0;
+}
+
+static int proc_dopipe_max_size(struct ctl_table *table, int write,
+				void *buffer, size_t *lenp, loff_t *ppos)
+{
+	return do_proc_douintvec(table, write, buffer, lenp, ppos,
+				 do_proc_dopipe_max_size_conv, NULL);
+}
+
+static struct ctl_table fs_pipe_sysctls[] = {
+	{
+		.procname	= "pipe-max-size",
+		.data		= &pipe_max_size,
+		.maxlen		= sizeof(pipe_max_size),
+		.mode		= 0644,
+		.proc_handler	= proc_dopipe_max_size,
+	},
+	{
+		.procname	= "pipe-user-pages-hard",
+		.data		= &pipe_user_pages_hard,
+		.maxlen		= sizeof(pipe_user_pages_hard),
+		.mode		= 0644,
+		.proc_handler	= proc_doulongvec_minmax,
+	},
+	{
+		.procname	= "pipe-user-pages-soft",
+		.data		= &pipe_user_pages_soft,
+		.maxlen		= sizeof(pipe_user_pages_soft),
+		.mode		= 0644,
+		.proc_handler	= proc_doulongvec_minmax,
+	},
+	{ }
+};
+#endif
+
 static int __init init_pipe_fs(void)
 {
 	int err = register_filesystem(&pipe_fs_type);
@@ -1439,6 +1512,9 @@ static int __init init_pipe_fs(void)
 			unregister_filesystem(&pipe_fs_type);
 		}
 	}
+#ifdef CONFIG_SYSCTL
+	register_sysctl_init("fs", fs_pipe_sysctls);
+#endif
 	return err;
 }
 

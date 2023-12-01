@@ -138,6 +138,7 @@ enum hclge_mod_name_list {
 	MODULE_RCB_TX		= 12,
 	MODULE_TXDMA		= 13,
 	MODULE_MASTER		= 14,
+	MODULE_HIMAC		= 15,
 	/* add new MODULE NAME for NIC here in order */
 	MODULE_ROCEE_TOP	= 40,
 	MODULE_ROCEE_TIMER	= 41,
@@ -166,9 +167,12 @@ enum hclge_err_type_list {
 	ETS_ERROR		= 10,
 	NCSI_ERROR		= 11,
 	GLB_ERROR		= 12,
+	LINK_ERROR		= 13,
+	PTP_ERROR		= 14,
 	/* add new ERROR TYPE for NIC here in order */
 	ROCEE_NORMAL_ERR	= 40,
 	ROCEE_OVF_ERR		= 41,
+	ROCEE_BUS_ERR		= 42,
 	/* add new ERROR TYPE for ROCEE here in order */
 };
 
@@ -192,6 +196,7 @@ struct hclge_hw_module_id {
 struct hclge_hw_type_id {
 	enum hclge_err_type_list type_id;
 	const char *msg;
+	bool cause_by_vf; /* indicate the error may from vf exception */
 };
 
 struct hclge_sum_err_info {
@@ -224,4 +229,5 @@ int hclge_handle_hw_msix_error(struct hclge_dev *hdev,
 			       unsigned long *reset_requests);
 int hclge_handle_error_info_log(struct hnae3_ae_dev *ae_dev);
 int hclge_handle_mac_tnl(struct hclge_dev *hdev);
+int hclge_handle_vf_queue_err_ras(struct hclge_dev *hdev);
 #endif

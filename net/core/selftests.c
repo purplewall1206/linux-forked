@@ -15,8 +15,8 @@
 #include <net/udp.h>
 
 struct net_packet_attrs {
-	unsigned char *src;
-	unsigned char *dst;
+	const unsigned char *src;
+	const unsigned char *dst;
 	u32 ip_src;
 	u32 ip_dst;
 	bool tcp;
@@ -173,8 +173,8 @@ static int net_test_loopback_validate(struct sk_buff *skb,
 				      struct net_device *orig_ndev)
 {
 	struct net_test_priv *tpriv = pt->af_packet_priv;
-	unsigned char *src = tpriv->packet->src;
-	unsigned char *dst = tpriv->packet->dst;
+	const unsigned char *src = tpriv->packet->src;
+	const unsigned char *dst = tpriv->packet->dst;
 	struct netsfhdr *shdr;
 	struct ethhdr *ehdr;
 	struct udphdr *uhdr;
@@ -397,16 +397,14 @@ EXPORT_SYMBOL_GPL(net_selftest_get_count);
 
 void net_selftest_get_strings(u8 *data)
 {
-	u8 *p = data;
 	int i;
 
-	for (i = 0; i < net_selftest_get_count(); i++) {
-		snprintf(p, ETH_GSTRING_LEN, "%2d. %s", i + 1,
-			 net_selftests[i].name);
-		p += ETH_GSTRING_LEN;
-	}
+	for (i = 0; i < net_selftest_get_count(); i++)
+		ethtool_sprintf(&data, "%2d. %s", i + 1,
+				net_selftests[i].name);
 }
 EXPORT_SYMBOL_GPL(net_selftest_get_strings);
 
+MODULE_DESCRIPTION("Common library for generic PHY ethtool selftests");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Oleksij Rempel <o.rempel@pengutronix.de>");

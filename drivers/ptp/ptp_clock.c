@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
+#include <linux/debugfs.h>
 #include <uapi/linux/sched/types.h>
 
 #include "ptp_private.h"
@@ -56,10 +57,11 @@ static void enqueue_external_timestamp(struct timestamp_event_queue *queue,
 	dst->t.sec = seconds;
 	dst->t.nsec = remainder;
 
+	/* Both WRITE_ONCE() are paired with READ_ONCE() in queue_cnt() */
 	if (!queue_free(queue))
-		queue->head = (queue->head + 1) % PTP_MAX_TIMESTAMPS;
+		WRITE_ONCE(queue->head, (queue->head + 1) % PTP_MAX_TIMESTAMPS);
 
-	queue->tail = (queue->tail + 1) % PTP_MAX_TIMESTAMPS;
+	WRITE_ONCE(queue->tail, (queue->tail + 1) % PTP_MAX_TIMESTAMPS);
 
 	spin_unlock_irqrestore(&queue->lock, flags);
 }
@@ -77,8 +79,8 @@ static int ptp_clock_settime(struct posix_clock *pc, const struct timespec64 *tp
 {
 	struct ptp_clock *ptp = container_of(pc, struct ptp_clock, clock);
 
-	if (ptp_vclock_in_use(ptp)) {
-		pr_err("ptp: virtual clock in use\n");
+	if (ptp_clock_freerun(ptp)) {
+		pr_err("ptp: physical clock is free running\n");
 		return -EBUSY;
 	}
 
@@ -103,8 +105,8 @@ static int ptp_clock_adjtime(struct posix_clock *pc, struct __kernel_timex *tx)
 	struct ptp_clock_info *ops;
 	int err = -EOPNOTSUPP;
 
-	if (ptp_vclock_in_use(ptp)) {
-		pr_err("ptp: virtual clock in use\n");
+	if (ptp_clock_freerun(ptp)) {
+		pr_err("ptp: physical clock is free running\n");
 		return -EBUSY;
 	}
 
@@ -131,17 +133,18 @@ static int ptp_clock_adjtime(struct posix_clock *pc, struct __kernel_timex *tx)
 		long ppb = scaled_ppm_to_ppb(tx->freq);
 		if (ppb > ops->max_adj || ppb < -ops->max_adj)
 			return -ERANGE;
-		if (ops->adjfine)
-			err = ops->adjfine(ops, tx->freq);
-		else
-			err = ops->adjfreq(ops, ppb);
+		err = ops->adjfine(ops, tx->freq);
 		ptp->dialed_frequency = tx->freq;
 	} else if (tx->modes & ADJ_OFFSET) {
 		if (ops->adjphase) {
+			s32 max_phase_adj = ops->getmaxphase(ops);
 			s32 offset = tx->offset;
 
 			if (!(tx->modes & ADJ_NANO))
 				offset *= NSEC_PER_USEC;
+
+			if (offset > max_phase_adj || offset < -max_phase_adj)
+				return -ERANGE;
 
 			err = ops->adjphase(ops, offset);
 		}
@@ -161,6 +164,7 @@ static struct posix_clock_operations ptp_clock_ops = {
 	.clock_settime	= ptp_clock_settime,
 	.ioctl		= ptp_ioctl,
 	.open		= ptp_open,
+	.release	= ptp_release,
 	.poll		= ptp_poll,
 	.read		= ptp_read,
 };
@@ -168,14 +172,32 @@ static struct posix_clock_operations ptp_clock_ops = {
 static void ptp_clock_release(struct device *dev)
 {
 	struct ptp_clock *ptp = container_of(dev, struct ptp_clock, dev);
+	struct timestamp_event_queue *tsevq;
+	unsigned long flags;
 
 	ptp_cleanup_pin_groups(ptp);
 	kfree(ptp->vclock_index);
-	mutex_destroy(&ptp->tsevq_mux);
 	mutex_destroy(&ptp->pincfg_mux);
 	mutex_destroy(&ptp->n_vclocks_mux);
-	ida_simple_remove(&ptp_clocks_map, ptp->index);
+	/* Delete first entry */
+	spin_lock_irqsave(&ptp->tsevqs_lock, flags);
+	tsevq = list_first_entry(&ptp->tsevqs, struct timestamp_event_queue,
+				 qlist);
+	list_del(&tsevq->qlist);
+	spin_unlock_irqrestore(&ptp->tsevqs_lock, flags);
+	bitmap_free(tsevq->mask);
+	kfree(tsevq);
+	debugfs_remove(ptp->debugfs_root);
+	ida_free(&ptp_clocks_map, ptp->index);
 	kfree(ptp);
+}
+
+static int ptp_getcycles64(struct ptp_clock_info *info, struct timespec64 *ts)
+{
+	if (info->getcyclesx64)
+		return info->getcyclesx64(info, ts, NULL);
+	else
+		return info->gettime64(info, ts);
 }
 
 static void ptp_aux_kworker(struct kthread_work *work)
@@ -197,7 +219,9 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 				     struct device *parent)
 {
 	struct ptp_clock *ptp;
+	struct timestamp_event_queue *queue = NULL;
 	int err = 0, index, major = MAJOR(ptp_devt);
+	char debugfsname[16];
 	size_t size;
 
 	if (info->n_alarm > PTP_MAX_ALARMS)
@@ -209,7 +233,7 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 	if (ptp == NULL)
 		goto no_memory;
 
-	index = ida_simple_get(&ptp_clocks_map, 0, MINORMASK + 1, GFP_KERNEL);
+	index = ida_alloc_max(&ptp_clocks_map, MINORMASK, GFP_KERNEL);
 	if (index < 0) {
 		err = index;
 		goto no_slot;
@@ -219,11 +243,35 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 	ptp->info = info;
 	ptp->devid = MKDEV(major, index);
 	ptp->index = index;
-	spin_lock_init(&ptp->tsevq.lock);
-	mutex_init(&ptp->tsevq_mux);
+	INIT_LIST_HEAD(&ptp->tsevqs);
+	queue = kzalloc(sizeof(*queue), GFP_KERNEL);
+	if (!queue)
+		goto no_memory_queue;
+	list_add_tail(&queue->qlist, &ptp->tsevqs);
+	spin_lock_init(&ptp->tsevqs_lock);
+	queue->mask = bitmap_alloc(PTP_MAX_CHANNELS, GFP_KERNEL);
+	if (!queue->mask)
+		goto no_memory_bitmap;
+	bitmap_set(queue->mask, 0, PTP_MAX_CHANNELS);
+	spin_lock_init(&queue->lock);
 	mutex_init(&ptp->pincfg_mux);
 	mutex_init(&ptp->n_vclocks_mux);
 	init_waitqueue_head(&ptp->tsev_wq);
+
+	if (ptp->info->getcycles64 || ptp->info->getcyclesx64) {
+		ptp->has_cycles = true;
+		if (!ptp->info->getcycles64 && ptp->info->getcyclesx64)
+			ptp->info->getcycles64 = ptp_getcycles64;
+	} else {
+		/* Free running cycle counter not supported, use time. */
+		ptp->info->getcycles64 = ptp_getcycles64;
+
+		if (ptp->info->gettimex64)
+			ptp->info->getcyclesx64 = ptp->info->gettimex64;
+
+		if (ptp->info->getcrosststamp)
+			ptp->info->getcrosscycles = ptp->info->getcrosststamp;
+	}
 
 	if (ptp->info->do_aux_work) {
 		kthread_init_delayed_work(&ptp->aux_work, ptp_aux_kworker);
@@ -284,17 +332,21 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 	/* Create a posix clock and link it to the device. */
 	err = posix_clock_register(&ptp->clock, &ptp->dev);
 	if (err) {
-	        if (ptp->pps_source)
-	                pps_unregister_source(ptp->pps_source);
+		if (ptp->pps_source)
+			pps_unregister_source(ptp->pps_source);
 
 		if (ptp->kworker)
-	                kthread_destroy_worker(ptp->kworker);
+			kthread_destroy_worker(ptp->kworker);
 
 		put_device(&ptp->dev);
 
 		pr_err("failed to create posix clock\n");
 		return ERR_PTR(err);
 	}
+
+	/* Debugfs initialization */
+	snprintf(debugfsname, sizeof(debugfsname), "ptp%d", ptp->index);
+	ptp->debugfs_root = debugfs_create_dir(debugfsname, NULL);
 
 	return ptp;
 
@@ -306,10 +358,14 @@ no_mem_for_vclocks:
 	if (ptp->kworker)
 		kthread_destroy_worker(ptp->kworker);
 kworker_err:
-	mutex_destroy(&ptp->tsevq_mux);
 	mutex_destroy(&ptp->pincfg_mux);
 	mutex_destroy(&ptp->n_vclocks_mux);
-	ida_simple_remove(&ptp_clocks_map, index);
+	bitmap_free(queue->mask);
+no_memory_bitmap:
+	list_del(&queue->qlist);
+	kfree(queue);
+no_memory_queue:
+	ida_free(&ptp_clocks_map, index);
 no_slot:
 	kfree(ptp);
 no_memory:
@@ -317,11 +373,18 @@ no_memory:
 }
 EXPORT_SYMBOL(ptp_clock_register);
 
+static int unregister_vclock(struct device *dev, void *data)
+{
+	struct ptp_clock *ptp = dev_get_drvdata(dev);
+
+	ptp_vclock_unregister(info_to_vclock(ptp->info));
+	return 0;
+}
+
 int ptp_clock_unregister(struct ptp_clock *ptp)
 {
 	if (ptp_vclock_in_use(ptp)) {
-		pr_err("ptp: virtual clock in use\n");
-		return -EBUSY;
+		device_for_each_child(&ptp->dev, NULL, unregister_vclock);
 	}
 
 	ptp->defunct = 1;
@@ -344,7 +407,9 @@ EXPORT_SYMBOL(ptp_clock_unregister);
 
 void ptp_clock_event(struct ptp_clock *ptp, struct ptp_clock_event *event)
 {
+	struct timestamp_event_queue *tsevq;
 	struct pps_event_time evt;
+	unsigned long flags;
 
 	switch (event->type) {
 
@@ -352,7 +417,13 @@ void ptp_clock_event(struct ptp_clock *ptp, struct ptp_clock_event *event)
 		break;
 
 	case PTP_CLOCK_EXTTS:
-		enqueue_external_timestamp(&ptp->tsevq, event);
+		/* Enqueue timestamp on selected queues */
+		spin_lock_irqsave(&ptp->tsevqs_lock, flags);
+		list_for_each_entry(tsevq, &ptp->tsevqs, qlist) {
+			if (test_bit((unsigned int)event->index, tsevq->mask))
+				enqueue_external_timestamp(tsevq, event);
+		}
+		spin_unlock_irqrestore(&ptp->tsevqs_lock, flags);
 		wake_up_interruptible(&ptp->tsev_wq);
 		break;
 
@@ -433,7 +504,7 @@ static int __init ptp_init(void)
 {
 	int err;
 
-	ptp_class = class_create(THIS_MODULE, "ptp");
+	ptp_class = class_create("ptp");
 	if (IS_ERR(ptp_class)) {
 		pr_err("ptp: failed to allocate class\n");
 		return PTR_ERR(ptp_class);

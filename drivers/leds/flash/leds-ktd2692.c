@@ -274,22 +274,17 @@ static int ktd2692_parse_dt(struct ktd2692_context *led, struct device *dev,
 	struct device_node *child_node;
 	int ret;
 
-	if (!dev_of_node(dev))
+	if (!np)
 		return -ENXIO;
 
 	led->ctrl_gpio = devm_gpiod_get(dev, "ctrl", GPIOD_ASIS);
 	ret = PTR_ERR_OR_ZERO(led->ctrl_gpio);
-	if (ret) {
-		dev_err(dev, "cannot get ctrl-gpios %d\n", ret);
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "cannot get ctrl-gpios\n");
 
-	led->aux_gpio = devm_gpiod_get(dev, "aux", GPIOD_ASIS);
-	ret = PTR_ERR_OR_ZERO(led->aux_gpio);
-	if (ret) {
-		dev_err(dev, "cannot get aux-gpios %d\n", ret);
-		return ret;
-	}
+	led->aux_gpio = devm_gpiod_get_optional(dev, "aux", GPIOD_ASIS);
+	if (IS_ERR(led->aux_gpio))
+		return dev_err_probe(dev, PTR_ERR(led->aux_gpio), "cannot get aux-gpios\n");
 
 	led->regulator = devm_regulator_get(dev, "vin");
 	if (IS_ERR(led->regulator))
@@ -391,15 +386,13 @@ static int ktd2692_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int ktd2692_remove(struct platform_device *pdev)
+static void ktd2692_remove(struct platform_device *pdev)
 {
 	struct ktd2692_context *led = platform_get_drvdata(pdev);
 
 	led_classdev_flash_unregister(&led->fled_cdev);
 
 	mutex_destroy(&led->lock);
-
-	return 0;
 }
 
 static const struct of_device_id ktd2692_match[] = {
@@ -414,7 +407,7 @@ static struct platform_driver ktd2692_driver = {
 		.of_match_table = ktd2692_match,
 	},
 	.probe  = ktd2692_probe,
-	.remove = ktd2692_remove,
+	.remove_new = ktd2692_remove,
 };
 
 module_platform_driver(ktd2692_driver);

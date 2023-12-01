@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0 or BSD-3-Clause
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
  * Copyright(c) 2018 Intel Corporation.
  */
@@ -6,7 +6,6 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/kernel.h>
-#include <linux/module.h>
 #include <linux/types.h>
 #include <linux/bitmap.h>
 

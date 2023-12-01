@@ -57,6 +57,7 @@ static const char version[] =
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/errno.h>
@@ -69,7 +70,6 @@ static const char version[] =
 #include <linux/workqueue.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/of_gpio.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -1588,9 +1588,9 @@ smc_ethtool_set_link_ksettings(struct net_device *dev,
 static void
 smc_ethtool_getdrvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 {
-	strlcpy(info->driver, CARDNAME, sizeof(info->driver));
-	strlcpy(info->version, version, sizeof(info->version));
-	strlcpy(info->bus_info, dev_name(dev->dev.parent),
+	strscpy(info->driver, CARDNAME, sizeof(info->driver));
+	strscpy(info->version, version, sizeof(info->version));
+	strscpy(info->bus_info, dev_name(dev->dev.parent),
 		sizeof(info->bus_info));
 }
 
@@ -1851,6 +1851,7 @@ static int smc_probe(struct net_device *dev, void __iomem *ioaddr,
 	int retval;
 	unsigned int val, revision_register;
 	const char *version_string;
+	u8 addr[ETH_ALEN];
 
 	DBG(2, dev, "%s: %s\n", CARDNAME, __func__);
 
@@ -1922,7 +1923,8 @@ static int smc_probe(struct net_device *dev, void __iomem *ioaddr,
 
 	/* Get the MAC address */
 	SMC_SELECT_BANK(lp, 1);
-	SMC_GET_MAC_ADDR(lp, dev->dev_addr);
+	SMC_GET_MAC_ADDR(lp, addr);
+	eth_hw_addr_set(dev, addr);
 
 	/* now, reset the chip, and put it into a known state */
 	smc_reset(dev);
@@ -2409,7 +2411,7 @@ static int smc_drv_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int smc_drv_remove(struct platform_device *pdev)
+static void smc_drv_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct smc_local *lp = netdev_priv(ndev);
@@ -2434,8 +2436,6 @@ static int smc_drv_remove(struct platform_device *pdev)
 	release_mem_region(res->start, SMC_IO_EXTENT);
 
 	free_netdev(ndev);
-
-	return 0;
 }
 
 static int smc_drv_suspend(struct device *dev)
@@ -2478,7 +2478,7 @@ static const struct dev_pm_ops smc_drv_pm_ops = {
 
 static struct platform_driver smc_driver = {
 	.probe		= smc_drv_probe,
-	.remove		= smc_drv_remove,
+	.remove_new	= smc_drv_remove,
 	.driver		= {
 		.name	= CARDNAME,
 		.pm	= &smc_drv_pm_ops,

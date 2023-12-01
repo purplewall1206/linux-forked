@@ -577,8 +577,6 @@ static int uvd_v3_1_sw_init(void *handle)
 	ptr += ucode_len;
 	memcpy(&adev->uvd.keyselect, ptr, 4);
 
-	r = amdgpu_uvd_entity_init(adev);
-
 	return r;
 }
 
@@ -698,6 +696,26 @@ static int uvd_v3_1_hw_fini(void *handle)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
+	cancel_delayed_work_sync(&adev->uvd.idle_work);
+
+	if (RREG32(mmUVD_STATUS) != 0)
+		uvd_v3_1_stop(adev);
+
+	return 0;
+}
+
+static int uvd_v3_1_prepare_suspend(void *handle)
+{
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+
+	return amdgpu_uvd_prepare_suspend(adev);
+}
+
+static int uvd_v3_1_suspend(void *handle)
+{
+	int r;
+	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+
 	/*
 	 * Proper cleanups before halting the HW engine:
 	 *   - cancel the delayed idle work
@@ -721,17 +739,6 @@ static int uvd_v3_1_hw_fini(void *handle)
 		amdgpu_device_ip_set_clockgating_state(adev, AMD_IP_BLOCK_TYPE_UVD,
 						       AMD_CG_STATE_GATE);
 	}
-
-	if (RREG32(mmUVD_STATUS) != 0)
-		uvd_v3_1_stop(adev);
-
-	return 0;
-}
-
-static int uvd_v3_1_suspend(void *handle)
-{
-	int r;
-	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
 	r = uvd_v3_1_hw_fini(adev);
 	if (r)
@@ -804,6 +811,7 @@ static const struct amd_ip_funcs uvd_v3_1_ip_funcs = {
 	.sw_fini = uvd_v3_1_sw_fini,
 	.hw_init = uvd_v3_1_hw_init,
 	.hw_fini = uvd_v3_1_hw_fini,
+	.prepare_suspend = uvd_v3_1_prepare_suspend,
 	.suspend = uvd_v3_1_suspend,
 	.resume = uvd_v3_1_resume,
 	.is_idle = uvd_v3_1_is_idle,
@@ -813,8 +821,7 @@ static const struct amd_ip_funcs uvd_v3_1_ip_funcs = {
 	.set_powergating_state = uvd_v3_1_set_powergating_state,
 };
 
-const struct amdgpu_ip_block_version uvd_v3_1_ip_block =
-{
+const struct amdgpu_ip_block_version uvd_v3_1_ip_block = {
 	.type = AMD_IP_BLOCK_TYPE_UVD,
 	.major = 3,
 	.minor = 1,

@@ -78,11 +78,10 @@
 #include <linux/gfp.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
-
-#include "../comedi_pci.h"
+#include <linux/comedi/comedi_pci.h>
+#include <linux/comedi/comedi_8254.h>
 
 #include "amcc_s5933.h"
-#include "comedi_8254.h"
 
 /*
  * PCI BAR2 Register map (dev->iobase)
@@ -1525,10 +1524,10 @@ static int pci9118_common_attach(struct comedi_device *dev,
 	devpriv->iobase_a = pci_resource_start(pcidev, 0);
 	dev->iobase = pci_resource_start(pcidev, 2);
 
-	dev->pacer = comedi_8254_init(dev->iobase + PCI9118_TIMER_BASE,
-				      I8254_OSC_BASE_4MHZ, I8254_IO32, 0);
-	if (!dev->pacer)
-		return -ENOMEM;
+	dev->pacer = comedi_8254_io_alloc(dev->iobase + PCI9118_TIMER_BASE,
+					  I8254_OSC_BASE_4MHZ, I8254_IO32, 0);
+	if (IS_ERR(dev->pacer))
+		return PTR_ERR(dev->pacer);
 
 	pci9118_reset(dev);
 

@@ -27,6 +27,9 @@
 
 #include <linux/init.h>
 #include <linux/pgtable.h>
+#include <linux/sizes.h>
+#include <linux/linkage.h>
+
 #include <asm/processor.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
@@ -35,7 +38,6 @@
 #include <asm/ppc_asm.h>
 #include <asm/asm-offsets.h>
 #include <asm/ptrace.h>
-#include <asm/export.h>
 
 #include "head_32.h"
 
@@ -52,8 +54,8 @@
  * This is all going to change RSN when we add bi_recs.......  -- Dan
  */
 	__HEAD
-_ENTRY(_stext);
-_ENTRY(_start);
+_GLOBAL(_stext);
+_GLOBAL(_start);
 
 	mr	r31,r3			/* save device tree ptr */
 
@@ -81,19 +83,19 @@ turn_on_mmu:
  */
 	. = 0xc0
 crit_save:
-_ENTRY(crit_r10)
+_GLOBAL(crit_r10)
 	.space	4
-_ENTRY(crit_r11)
+_GLOBAL(crit_r11)
 	.space	4
-_ENTRY(crit_srr0)
+_GLOBAL(crit_srr0)
 	.space	4
-_ENTRY(crit_srr1)
+_GLOBAL(crit_srr1)
 	.space	4
-_ENTRY(crit_r1)
+_GLOBAL(crit_r1)
 	.space	4
-_ENTRY(crit_dear)
+_GLOBAL(crit_dear)
 	.space	4
-_ENTRY(crit_esr)
+_GLOBAL(crit_esr)
 	.space	4
 
 /*
@@ -297,6 +299,10 @@ _ASM_NOKPROBE_SYMBOL(\name\()_virt)
 3:
 	mfspr	r11,SPRN_SPRG_THREAD
 	lwz	r11,PGDIR(r11)
+#ifdef CONFIG_PPC_KUAP
+	rlwinm.	r9, r9, 0, 0xff
+	beq	5f			/* Kuap fault */
+#endif
 4:
 	tophys(r11, r11)
 	rlwimi	r11, r10, 12, 20, 29	/* Create L1 (pgdir/pmd) address */
@@ -306,13 +312,13 @@ _ASM_NOKPROBE_SYMBOL(\name\()_virt)
 
 	rlwimi	r11, r10, 22, 20, 29	/* Compute PTE address */
 	lwz	r11, 0(r11)		/* Get Linux PTE */
-	li	r9, _PAGE_PRESENT | _PAGE_ACCESSED
+	li	r9, _PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_READ
 	andc.	r9, r9, r11		/* Check permission */
 	bne	5f
 
-	rlwinm	r9, r11, 1, _PAGE_RW	/* dirty => rw */
-	and	r9, r9, r11		/* hwwrite = dirty & rw */
-	rlwimi	r11, r9, 0, _PAGE_RW	/* replace rw by hwwrite */
+	rlwinm	r9, r11, 1, _PAGE_WRITE	/* dirty => w */
+	and	r9, r9, r11		/* hwwrite = dirty & w */
+	rlwimi	r11, r9, 0, _PAGE_WRITE	/* replace w by hwwrite */
 
 	/* Create TLB tag.  This is the faulting address plus a static
 	 * set of bits.  These are size, valid, E, U0.
@@ -377,6 +383,10 @@ _ASM_NOKPROBE_SYMBOL(\name\()_virt)
 3:
 	mfspr	r11,SPRN_SPRG_THREAD
 	lwz	r11,PGDIR(r11)
+#ifdef CONFIG_PPC_KUAP
+	rlwinm.	r9, r9, 0, 0xff
+	beq	5f			/* Kuap fault */
+#endif
 4:
 	tophys(r11, r11)
 	rlwimi	r11, r10, 12, 20, 29	/* Create L1 (pgdir/pmd) address */
@@ -390,9 +400,9 @@ _ASM_NOKPROBE_SYMBOL(\name\()_virt)
 	andc.	r9, r9, r11		/* Check permission */
 	bne	5f
 
-	rlwinm	r9, r11, 1, _PAGE_RW	/* dirty => rw */
-	and	r9, r9, r11		/* hwwrite = dirty & rw */
-	rlwimi	r11, r9, 0, _PAGE_RW	/* replace rw by hwwrite */
+	rlwinm	r9, r11, 1, _PAGE_WRITE	/* dirty => w */
+	and	r9, r9, r11		/* hwwrite = dirty & w */
+	rlwimi	r11, r9, 0, _PAGE_WRITE	/* replace w by hwwrite */
 
 	/* Create TLB tag.  This is the faulting address plus a static
 	 * set of bits.  These are size, valid, E, U0.
@@ -551,10 +561,11 @@ finish_tlb_load:
 	/*
 	 * Clear out the software-only bits in the PTE to generate the
 	 * TLB_DATA value.  These are the bottom 2 bits of the RPM, the
-	 * top 3 bits of the zone field, and M.
+	 * 4 bits of the zone field, and M.
 	 */
-	li	r9, 0x0ce2
+	li	r9, 0x0cf2
 	andc	r11, r11, r9
+	rlwimi	r11, r10, 8, 24, 27	/* Copy 4 upper address bit into zone */
 
 	/* load the next available TLB index. */
 	lwz	r9, tlb_4xx_index@l(0)
@@ -593,7 +604,7 @@ start_here:
 	lis	r1,init_thread_union@ha
 	addi	r1,r1,init_thread_union@l
 	li	r0,0
-	stwu	r0,THREAD_SIZE-STACK_FRAME_OVERHEAD(r1)
+	stwu	r0,THREAD_SIZE-STACK_FRAME_MIN_SIZE(r1)
 
 	bl	early_init	/* We have to do this with MMU on */
 
@@ -650,10 +661,10 @@ start_here:
 	b	.		/* prevent prefetch past rfi */
 
 /* Set up the initial MMU state so we can do the first level of
- * kernel initialization.  This maps the first 16 MBytes of memory 1:1
+ * kernel initialization.  This maps the first 32 MBytes of memory 1:1
  * virtual to physical and more importantly sets the cache mode.
  */
-initial_mmu:
+SYM_FUNC_START_LOCAL(initial_mmu)
 	tlbia			/* Invalidate all TLB entries */
 	isync
 
@@ -687,6 +698,12 @@ initial_mmu:
 	tlbwe	r4,r0,TLB_DATA		/* Load the data portion of the entry */
 	tlbwe	r3,r0,TLB_TAG		/* Load the tag portion of the entry */
 
+	li	r0,62			/* TLB slot 62 */
+	addis	r4,r4,SZ_16M@h
+	addis	r3,r3,SZ_16M@h
+	tlbwe	r4,r0,TLB_DATA		/* Load the data portion of the entry */
+	tlbwe	r3,r0,TLB_TAG		/* Load the tag portion of the entry */
+
 	isync
 
 	/* Establish the exception vector base
@@ -696,6 +713,7 @@ initial_mmu:
 	mtspr	SPRN_EVPR,r0
 
 	blr
+SYM_FUNC_END(initial_mmu)
 
 _GLOBAL(abort)
         mfspr   r13,SPRN_DBCR0

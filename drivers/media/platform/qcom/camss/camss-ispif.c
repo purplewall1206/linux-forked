@@ -106,10 +106,10 @@ enum ispif_intf_cmd {
 };
 
 static const u32 ispif_formats_8x16[] = {
-	MEDIA_BUS_FMT_UYVY8_2X8,
-	MEDIA_BUS_FMT_VYUY8_2X8,
-	MEDIA_BUS_FMT_YUYV8_2X8,
-	MEDIA_BUS_FMT_YVYU8_2X8,
+	MEDIA_BUS_FMT_UYVY8_1X16,
+	MEDIA_BUS_FMT_VYUY8_1X16,
+	MEDIA_BUS_FMT_YUYV8_1X16,
+	MEDIA_BUS_FMT_YVYU8_1X16,
 	MEDIA_BUS_FMT_SBGGR8_1X8,
 	MEDIA_BUS_FMT_SGBRG8_1X8,
 	MEDIA_BUS_FMT_SGRBG8_1X8,
@@ -126,10 +126,10 @@ static const u32 ispif_formats_8x16[] = {
 };
 
 static const u32 ispif_formats_8x96[] = {
-	MEDIA_BUS_FMT_UYVY8_2X8,
-	MEDIA_BUS_FMT_VYUY8_2X8,
-	MEDIA_BUS_FMT_YUYV8_2X8,
-	MEDIA_BUS_FMT_YVYU8_2X8,
+	MEDIA_BUS_FMT_UYVY8_1X16,
+	MEDIA_BUS_FMT_VYUY8_1X16,
+	MEDIA_BUS_FMT_YUYV8_1X16,
+	MEDIA_BUS_FMT_YVYU8_1X16,
 	MEDIA_BUS_FMT_SBGGR8_1X8,
 	MEDIA_BUS_FMT_SGBRG8_1X8,
 	MEDIA_BUS_FMT_SGRBG8_1X8,
@@ -270,7 +270,7 @@ static int ispif_vfe_reset(struct ispif_device *ispif, u8 vfe_id)
 	unsigned long time;
 	u32 val;
 
-	if (vfe_id > (camss->vfe_num - 1)) {
+	if (vfe_id > camss->res->vfe_num - 1) {
 		dev_err(camss->dev,
 			"Error: asked reset for invalid VFE%d\n", vfe_id);
 		return -ENOENT;
@@ -812,7 +812,7 @@ static int ispif_set_stream(struct v4l2_subdev *sd, int enable)
 	int ret;
 
 	if (enable) {
-		if (!media_entity_remote_pad(&line->pads[MSM_ISPIF_PAD_SINK]))
+		if (!media_pad_remote_pad_first(&line->pads[MSM_ISPIF_PAD_SINK]))
 			return -ENOLINK;
 
 		/* Config */
@@ -829,8 +829,8 @@ static int ispif_set_stream(struct v4l2_subdev *sd, int enable)
 		ispif_select_csid(ispif, intf, csid, vfe, 1);
 		ispif_select_cid(ispif, intf, cid, vfe, 1);
 		ispif_config_irq(ispif, intf, vfe, 1);
-		if (camss->version == CAMSS_8x96 ||
-		    camss->version == CAMSS_660)
+		if (camss->res->version == CAMSS_8x96 ||
+		    camss->res->version == CAMSS_660)
 			ispif_config_pack(ispif,
 					  line->fmt[MSM_ISPIF_PAD_SINK].code,
 					  intf, cid, vfe, 1);
@@ -847,8 +847,8 @@ static int ispif_set_stream(struct v4l2_subdev *sd, int enable)
 			return ret;
 
 		mutex_lock(&ispif->config_lock);
-		if (camss->version == CAMSS_8x96 ||
-		    camss->version == CAMSS_660)
+		if (camss->res->version == CAMSS_8x96 ||
+		    camss->res->version == CAMSS_660)
 			ispif_config_pack(ispif,
 					  line->fmt[MSM_ISPIF_PAD_SINK].code,
 					  intf, cid, vfe, 0);
@@ -911,7 +911,7 @@ static void ispif_try_format(struct ispif_line *line,
 
 		/* If not found, use UYVY as default */
 		if (i >= line->nformats)
-			fmt->code = MEDIA_BUS_FMT_UYVY8_2X8;
+			fmt->code = MEDIA_BUS_FMT_UYVY8_1X16;
 
 		fmt->width = clamp_t(u32, fmt->width, 1, 8191);
 		fmt->height = clamp_t(u32, fmt->height, 1, 8191);
@@ -1078,7 +1078,7 @@ static int ispif_init_formats(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 		.which = fh ? V4L2_SUBDEV_FORMAT_TRY :
 			      V4L2_SUBDEV_FORMAT_ACTIVE,
 		.format = {
-			.code = MEDIA_BUS_FMT_UYVY8_2X8,
+			.code = MEDIA_BUS_FMT_UYVY8_1X16,
 			.width = 1920,
 			.height = 1080
 		}
@@ -1095,12 +1095,11 @@ static int ispif_init_formats(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
  * Return 0 on success or a negative error code otherwise
  */
 int msm_ispif_subdev_init(struct camss *camss,
-			  const struct resources_ispif *res)
+			  const struct camss_subdev_resources *res)
 {
 	struct device *dev = camss->dev;
 	struct ispif_device *ispif = camss->ispif;
 	struct platform_device *pdev = to_platform_device(dev);
-	struct resource *r;
 	int i;
 	int ret;
 
@@ -1110,10 +1109,10 @@ int msm_ispif_subdev_init(struct camss *camss,
 	ispif->camss = camss;
 
 	/* Number of ISPIF lines - same as number of CSID hardware modules */
-	if (camss->version == CAMSS_8x16)
+	if (camss->res->version == CAMSS_8x16)
 		ispif->line_num = 2;
-	else if (camss->version == CAMSS_8x96 ||
-		 camss->version == CAMSS_660)
+	else if (camss->res->version == CAMSS_8x96 ||
+		 camss->res->version == CAMSS_660)
 		ispif->line_num = 4;
 	else
 		return -EINVAL;
@@ -1127,12 +1126,12 @@ int msm_ispif_subdev_init(struct camss *camss,
 		ispif->line[i].ispif = ispif;
 		ispif->line[i].id = i;
 
-		if (camss->version == CAMSS_8x16) {
+		if (camss->res->version == CAMSS_8x16) {
 			ispif->line[i].formats = ispif_formats_8x16;
 			ispif->line[i].nformats =
 					ARRAY_SIZE(ispif_formats_8x16);
-		} else if (camss->version == CAMSS_8x96 ||
-			   camss->version == CAMSS_660) {
+		} else if (camss->res->version == CAMSS_8x96 ||
+			   camss->res->version == CAMSS_660) {
 			ispif->line[i].formats = ispif_formats_8x96;
 			ispif->line[i].nformats =
 					ARRAY_SIZE(ispif_formats_8x96);
@@ -1153,21 +1152,18 @@ int msm_ispif_subdev_init(struct camss *camss,
 
 	/* Interrupt */
 
-	r = platform_get_resource_byname(pdev, IORESOURCE_IRQ, res->interrupt);
+	ret = platform_get_irq_byname(pdev, res->interrupt[0]);
+	if (ret < 0)
+		return ret;
 
-	if (!r) {
-		dev_err(dev, "missing IRQ\n");
-		return -EINVAL;
-	}
-
-	ispif->irq = r->start;
+	ispif->irq = ret;
 	snprintf(ispif->irq_name, sizeof(ispif->irq_name), "%s_%s",
 		 dev_name(dev), MSM_ISPIF_NAME);
-	if (camss->version == CAMSS_8x16)
+	if (camss->res->version == CAMSS_8x16)
 		ret = devm_request_irq(dev, ispif->irq, ispif_isr_8x16,
 			       IRQF_TRIGGER_RISING, ispif->irq_name, ispif);
-	else if (camss->version == CAMSS_8x96 ||
-		 camss->version == CAMSS_660)
+	else if (camss->res->version == CAMSS_8x96 ||
+		 camss->res->version == CAMSS_660)
 		ret = devm_request_irq(dev, ispif->irq, ispif_isr_8x96,
 			       IRQF_TRIGGER_RISING, ispif->irq_name, ispif);
 	else
@@ -1257,6 +1253,41 @@ static enum ispif_intf ispif_get_intf(enum vfe_line_id line_id)
 }
 
 /*
+ * ispif_get_vfe_id - Get VFE HW module id
+ * @entity: Pointer to VFE media entity structure
+ * @id: Return CSID HW module id here
+ */
+static void ispif_get_vfe_id(struct media_entity *entity, u8 *id)
+{
+	struct v4l2_subdev *sd;
+	struct vfe_line *line;
+	struct vfe_device *vfe;
+
+	sd = media_entity_to_v4l2_subdev(entity);
+	line = v4l2_get_subdevdata(sd);
+	vfe = to_vfe(line);
+
+	*id = vfe->id;
+}
+
+/*
+ * ispif_get_vfe_line_id - Get VFE line id by media entity
+ * @entity: Pointer to VFE media entity structure
+ * @id: Return VFE line id here
+ */
+static void ispif_get_vfe_line_id(struct media_entity *entity,
+				  enum vfe_line_id *id)
+{
+	struct v4l2_subdev *sd;
+	struct vfe_line *line;
+
+	sd = media_entity_to_v4l2_subdev(entity);
+	line = v4l2_get_subdevdata(sd);
+
+	*id = line->id;
+}
+
+/*
  * ispif_link_setup - Setup ISPIF connections
  * @entity: Pointer to media entity structure
  * @local: Pointer to local pad
@@ -1270,7 +1301,7 @@ static int ispif_link_setup(struct media_entity *entity,
 			    const struct media_pad *remote, u32 flags)
 {
 	if (flags & MEDIA_LNK_FL_ENABLED) {
-		if (media_entity_remote_pad(local))
+		if (media_pad_remote_pad_first(local))
 			return -EBUSY;
 
 		if (local->flags & MEDIA_PAD_FL_SINK) {
@@ -1289,8 +1320,8 @@ static int ispif_link_setup(struct media_entity *entity,
 			sd = media_entity_to_v4l2_subdev(entity);
 			line = v4l2_get_subdevdata(sd);
 
-			msm_vfe_get_vfe_id(remote->entity, &line->vfe_id);
-			msm_vfe_get_vfe_line_id(remote->entity, &id);
+			ispif_get_vfe_id(remote->entity, &line->vfe_id);
+			ispif_get_vfe_line_id(remote->entity, &id);
 			line->interface = ispif_get_intf(id);
 		}
 	}

@@ -93,7 +93,6 @@ struct mt9m001 {
 		struct v4l2_ctrl *autoexposure;
 		struct v4l2_ctrl *exposure;
 	};
-	bool streaming;
 	struct mutex mutex;
 	struct v4l2_rect rect;	/* Sensor window */
 	struct clk *clk;
@@ -213,9 +212,6 @@ static int mt9m001_s_stream(struct v4l2_subdev *sd, int enable)
 
 	mutex_lock(&mt9m001->mutex);
 
-	if (mt9m001->streaming == enable)
-		goto done;
-
 	if (enable) {
 		ret = pm_runtime_resume_and_get(&client->dev);
 		if (ret < 0)
@@ -239,8 +235,6 @@ static int mt9m001_s_stream(struct v4l2_subdev *sd, int enable)
 		pm_runtime_put(&client->dev);
 	}
 
-	mt9m001->streaming = enable;
-done:
 	mutex_unlock(&mt9m001->mutex);
 
 	return 0;
@@ -695,10 +689,12 @@ static int mt9m001_get_mbus_config(struct v4l2_subdev *sd,
 				   struct v4l2_mbus_config *cfg)
 {
 	/* MT9M001 has all capture_format parameters fixed */
-	cfg->flags = V4L2_MBUS_PCLK_SAMPLE_FALLING |
-		V4L2_MBUS_HSYNC_ACTIVE_HIGH | V4L2_MBUS_VSYNC_ACTIVE_HIGH |
-		V4L2_MBUS_DATA_ACTIVE_HIGH | V4L2_MBUS_MASTER;
 	cfg->type = V4L2_MBUS_PARALLEL;
+	cfg->bus.parallel.flags = V4L2_MBUS_PCLK_SAMPLE_FALLING |
+				  V4L2_MBUS_HSYNC_ACTIVE_HIGH |
+				  V4L2_MBUS_VSYNC_ACTIVE_HIGH |
+				  V4L2_MBUS_DATA_ACTIVE_HIGH |
+				  V4L2_MBUS_MASTER;
 
 	return 0;
 }
@@ -831,7 +827,7 @@ error_hdl_free:
 	return ret;
 }
 
-static int mt9m001_remove(struct i2c_client *client)
+static void mt9m001_remove(struct i2c_client *client)
 {
 	struct mt9m001 *mt9m001 = to_mt9m001(client);
 
@@ -851,8 +847,6 @@ static int mt9m001_remove(struct i2c_client *client)
 
 	v4l2_ctrl_handler_free(&mt9m001->hdl);
 	mutex_destroy(&mt9m001->mutex);
-
-	return 0;
 }
 
 static const struct i2c_device_id mt9m001_id[] = {
@@ -877,7 +871,7 @@ static struct i2c_driver mt9m001_i2c_driver = {
 		.pm = &mt9m001_pm_ops,
 		.of_match_table = mt9m001_of_match,
 	},
-	.probe_new	= mt9m001_probe,
+	.probe		= mt9m001_probe,
 	.remove		= mt9m001_remove,
 	.id_table	= mt9m001_id,
 };
