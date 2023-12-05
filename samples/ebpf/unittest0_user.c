@@ -5,6 +5,8 @@
 #include <errno.h>
 #include <sys/resource.h>
 #include <bpf/libbpf.h>
+#include <bpf/bpf.h>
+#include <bpf/btf.h>
 #include <fcntl.h>
 
 static volatile sig_atomic_t stop;
@@ -15,12 +17,28 @@ static void sig_int(int signo)
 }
 
 
+struct args {
+	int memcg_id;
+};
+
+
+int run_aging(int aging_fd, int memcg_id)
+{
+	struct args ctx = {
+		.memcg_id = memcg_id,
+	};
+	LIBBPF_OPTS(bpf_test_run_opts, tattr, .ctx_in = &ctx,
+		    .ctx_size_in = sizeof(ctx));
+	return bpf_prog_test_run_opts(aging_fd, &tattr);
+}
+
 // cat /sys/kernel/debug/tracing/trace_pipe
 int main(int argc, char **argv)
 {
     struct bpf_link *links[2];
 	struct bpf_program *prog;
 	struct bpf_object *obj;
+	int memcg_aging_fd;
 	char filename[256];
 	int j = 0;
 	int trace_fd;
@@ -47,9 +65,15 @@ int main(int argc, char **argv)
 
 
 	bpf_object__for_each_program(prog, obj) {
+		char *prog_name = bpf_program__name(prog);
+		if (strncmp(prog_name, "memcg_run_aging", 15) == 0) {
+			memcg_aging_fd = bpf_program__fd(prog);
+			continue;
+		}
 		links[j] = bpf_program__attach(prog);
 		if (libbpf_get_error(links[j])) {
 			fprintf(stderr, "ERROR: bpf_program__attach failed\n");
+			printf("attach failed: %016lx, %s\n", prog, bpf_program__name(prog));
 			links[j] = NULL;
 			goto cleanup;
 		}
@@ -66,9 +90,11 @@ int main(int argc, char **argv)
 
 	
 	printf("start tracing\n");
+	run_aging(memcg_aging_fd, 0);
     while (!stop) {
         // fprintf(stderr, ".");
         // sleep(1);
+		// run_aging(memcg_aging_fd, 0);
 		static char buf[4096];
 		ssize_t sz;
 		sz = read(trace_fd, buf, sizeof(buf) - 1);
@@ -81,11 +107,10 @@ int main(int argc, char **argv)
 
 
     cleanup:
-        // bpf_link__destroy(link);
-		// for (j--; j >= 0; j--)
-		// 	bpf_link__destroy(links[j]);
-	    // bpf_object__close(obj);
-		// close(trace_fd);
+		for (j--; j >= 0; j--)
+			bpf_link__destroy(links[j]);
+	    bpf_object__close(obj);
+		close(trace_fd);
         return 0;
 
 
