@@ -46,7 +46,7 @@ int main(int argc, char **argv)
 	trace_fd = open("/sys/kernel/debug/tracing/trace_pipe", O_RDONLY, 0);
 	if (trace_fd < 0) {
 		printf("cannot open trace_pipe %d\n", trace_fd);
-		return trace_fd;
+		// return trace_fd;
 	}
 
     snprintf(filename, sizeof(filename), "%s_kern.o", argv[0]);
@@ -90,20 +90,28 @@ int main(int argc, char **argv)
 
 	
 	printf("start tracing\n");
-	run_aging(memcg_aging_fd, 0);
-    while (!stop) {
-        // fprintf(stderr, ".");
-        // sleep(1);
-		// run_aging(memcg_aging_fd, 0);
-		static char buf[4096];
-		ssize_t sz;
-		sz = read(trace_fd, buf, sizeof(buf) - 1);
-		if (sz > 0) {
-			buf[sz] = '\0';
-			// printf("trace: %s\n", buf);
-			puts(buf);
-		}
-    }
+	
+	int c = 1;
+	while (!stop) {
+		run_aging(memcg_aging_fd, c);
+		sleep(12);
+	}
+    // while (!stop) {
+	// 	// sleep(1);
+	// 	// run_aging(memcg_aging_fd, c++);
+
+	// 	// if (c == 10000) goto cleanup;
+	// 	// sleep(1);
+		
+	// 	static char buf[4096];
+	// 	ssize_t sz;
+	// 	sz = read(trace_fd, buf, sizeof(buf) - 1);
+	// 	if (sz > 0) {
+	// 		buf[sz] = '\0';
+	// 		// printf("trace: %s\n", buf);
+	// 		puts(buf);
+	// 	}
+    // }
 
 
     cleanup:

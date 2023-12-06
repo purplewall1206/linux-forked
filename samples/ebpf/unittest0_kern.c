@@ -54,10 +54,12 @@ int BPF_PROG(fentry_mglru_pmd_probe, pid_t pid, unsigned int nid,
 	     unsigned long addr, unsigned long len, bool anon)
 {
 	int err = 0;
-
-	if (pid != target_pid)
-		return 0;
+	char name[32];
+	// if (pid != target_pid)
+	// 	return 0;
 	// err = probe(nid, addr, len, anon);
+	bpf_get_current_comm(name, 32);
+	bpf_printk("PMD called addr:0x%lx len:%lu, comm:%s\n", addr, len, name);
 	if (err)
 		bpf_printk("PMD called addr:0x%lx len:%lu error:%ld", addr, len,
 			   err);
@@ -78,8 +80,8 @@ int memcg_run_aging(struct args *ctx)
 	err = bpf_run_aging(ctx->memcg_id, true, true);
 
 	if (err != 0) {
-		bpf_printk("aging failed for memcg %ld with error %d",
-			   ctx->memcg_id, err);
+		// bpf_printk("aging failed for memcg %ld with error %d",
+		// 	   ctx->memcg_id, err);
 		return 0;
 	}
 	bpf_printk("aging succeeded for memcg %ld", ctx->memcg_id);
