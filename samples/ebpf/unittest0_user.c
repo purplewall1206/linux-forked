@@ -32,6 +32,16 @@ int run_aging(int aging_fd, int memcg_id)
 	return bpf_prog_test_run_opts(aging_fd, &tattr);
 }
 
+int run_active_scan(int scan_fd, int pid)
+{
+	struct args ctx = {
+		.memcg_id = pid,
+	};
+	LIBBPF_OPTS(bpf_test_run_opts, tattr, .ctx_in = &ctx,
+		    .ctx_size_in = sizeof(ctx));
+	return bpf_prog_test_run_opts(scan_fd, &tattr);
+}
+
 // cat /sys/kernel/debug/tracing/trace_pipe
 int main(int argc, char **argv)
 {
@@ -92,10 +102,11 @@ int main(int argc, char **argv)
 	printf("start tracing\n");
 	
 	int c = 1;
-	while (!stop) {
-		run_aging(memcg_aging_fd, c);
-		sleep(12);
-	}
+	// while (!stop) {
+	// 	run_aging(memcg_aging_fd, 2);
+	// 	sleep(12);
+	// }
+	run_active_scan(memcg_aging_fd, 247);
     // while (!stop) {
 	// 	// sleep(1);
 	// 	// run_aging(memcg_aging_fd, c++);

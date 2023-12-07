@@ -6203,12 +6203,128 @@ done:
 	return err;
 }
 
+const char *get_file_name(struct file *file) {
+    struct dentry *dentry;
+
+    if (!file)
+        return NULL;
+
+    dentry = file->f_path.dentry;
+    if (!dentry)
+        return NULL;
+
+    // dentry->d_name.name contains the name of the file
+    return dentry->d_name.name;
+}
+
+
+int bpf_active_page_scan(int memcg_id, pid_t pid)
+{
+	int err = -EINVAL;
+	struct mem_cgroup *memcg = NULL;
+	struct blk_plug plug;
+	unsigned int flags;
+	unsigned int nid;
+	struct task_struct *tsk;
+	struct lruvec *lruvec;
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
+	const char *name;
+	char *temp_buffer;
+	struct scan_control sc = {
+		.may_writepage = true,
+		.may_unmap = true,
+		.may_swap = true,
+		.reclaim_idx = MAX_NR_ZONES - 1,
+		.gfp_mask = GFP_KERNEL,
+	};
+	struct lru_gen_mm_walk *walk;
+
+	
+
+	tsk = find_get_task_by_vpid(pid);
+	if (!tsk) return -EINVAL;
+	mm = get_task_mm(tsk);
+	if (!mm) return -EINVAL;
+
+	// if (mmap_read_trylock(mm)) {
+	// 	VMA_ITERATOR(vmi, mm, 0);
+	// 	for_each_vma(vmi, vma) {
+			
+	// 		if (!vma->vm_file) {
+	// 			// anon_name = anon_vma_name(vma);
+	// 			pr_info("===%s: %016lx %016lx===\n", "anon", vma->vm_start, vma->vm_end);
+	// 		} else {
+	// 			name = get_file_name(vma->vm_file);
+	// 			pr_info("===%s: %016lx %016lx===\n", name, vma->vm_start, vma->vm_end);
+	// 		}
+			
+	// 		// page walk
+	// 	}
+	// 	mmap_read_unlock(mm);
+	// }
+
+
+	if (!mem_cgroup_disabled()) {
+		rcu_read_lock();
+		memcg = mem_cgroup_from_id(memcg_id);
+#ifdef CONFIG_MEMCG
+		if (memcg && !css_tryget(&memcg->css))
+			memcg = NULL;
+#endif
+		rcu_read_unlock();
+
+		if (!memcg)
+			return -EINVAL;
+	}
+
+	if (memcg_id != mem_cgroup_id(memcg)) {
+		mem_cgroup_put(memcg);
+		return err;
+	}
+
+	set_task_reclaim_state(current, &sc.reclaim_state);
+	flags = memalloc_noreclaim_save();
+	blk_start_plug(&plug);
+	if (!set_mm_walk(NULL, true)) {
+		err = -ENOMEM;
+		goto done;
+	}
+walk = set_mm_walk(NULL, true);
+	for_each_online_node(nid) {
+		struct lruvec *lruvec = get_lruvec(memcg, nid);
+		DEFINE_MAX_SEQ(lruvec);
+		
+
+		walk_mm(lruvec, mm, walk);
+
+		if (err)
+			goto done;
+	}
+	
+
+	// lruvec = getlruvec(memcg, nid);
+
+	// walk_mm();
+
+
+done:
+	clear_mm_walk();
+	blk_finish_plug(&plug);
+	memalloc_noreclaim_restore(flags);
+	set_task_reclaim_state(current, NULL);
+	mem_cgroup_put(memcg);
+
+	return 0;
+}
+
 BTF_SET8_START(bpf_lru_gen_trace_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_set_skip_mm)
 BTF_SET8_END(bpf_lru_gen_trace_kfunc_ids)
 
 BTF_SET8_START(bpf_lru_gen_syscall_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_run_aging)
+BTF_ID_FLAGS(func, bpf_active_page_scan)
 BTF_SET8_END(bpf_lru_gen_syscall_kfunc_ids)
 
 static const struct btf_kfunc_id_set bpf_lru_gen_trace_kfunc_set = {

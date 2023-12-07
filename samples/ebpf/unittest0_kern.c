@@ -68,8 +68,11 @@ int BPF_PROG(fentry_mglru_pmd_probe, pid_t pid, unsigned int nid,
 
 extern int bpf_run_aging(int memcg_id, bool can_swap, bool force_scan) __ksym;
 
+extern int bpf_active_page_scan(int pid) __ksym;
+
 struct args {
 	int memcg_id;
+	int pid;
 };
 
 SEC("syscall")
@@ -77,7 +80,8 @@ int memcg_run_aging(struct args *ctx)
 {
 	int err;
 
-	err = bpf_run_aging(ctx->memcg_id, true, true);
+	// err = bpf_run_aging(ctx->memcg_id, true, true);
+	err = bpf_active_page_scan(ctx->memcg_id, ctx->pid);
 
 	if (err != 0) {
 		// bpf_printk("aging failed for memcg %ld with error %d",
