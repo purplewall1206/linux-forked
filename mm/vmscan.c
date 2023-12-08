@@ -68,6 +68,7 @@
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
 #include <linux/rcupdate.h>
+#include <linux/mmap_lock.h>
 
 #include "internal.h"
 #include "swap.h"
@@ -6218,103 +6219,179 @@ const char *get_file_name(struct file *file) {
 }
 
 
+// int bpf_active_page_scan(int memcg_id, pid_t pid)
+// {
+// 	int err = -EINVAL;
+// 	struct mem_cgroup *memcg = NULL;
+// 	struct blk_plug plug;
+// 	unsigned int flags;
+// 	unsigned int nid;
+// 	struct task_struct *tsk;
+// 	struct lruvec *lruvec;
+// 	struct mm_struct *mm;
+// 	struct vm_area_struct *vma;
+// 	const char *name;
+// 	char *temp_buffer;
+// 	struct scan_control sc = {
+// 		.may_writepage = true,
+// 		.may_unmap = true,
+// 		.may_swap = true,
+// 		.reclaim_idx = MAX_NR_ZONES - 1,
+// 		.gfp_mask = GFP_KERNEL,
+// 	};
+// 	struct lru_gen_mm_walk *walk;
+// 	static const struct mm_walk_ops mm_walk_ops = {
+// 		.test_walk = should_skip_vma,
+// 		.p4d_entry = walk_pud_range,
+// 	};
+
+// 	pgd_t *pgd;
+// 	p4d_t *p4d;
+//     pud_t *pud;
+//     pmd_t *pmd;
+//     pte_t *pte;
+//     unsigned long address, end;
+
+	
+
+// 	tsk = find_get_task_by_vpid(pid);
+// 	if (!tsk) return -EINVAL;
+// 	mm = get_task_mm(tsk);
+// 	if (!mm) return -EINVAL;
+
+
+// 	VMA_ITERATOR(vmi, mm, 0);
+// 	for_each_vma(vmi, vma) {
+// 		if (!vma->vm_mm) continue; //vdso
+// 		if (vma_is_anonymous(vma)) continue; // vdso
+// 		if (vma->vm_start <= vma->vm_mm->start_stack &&
+// 				vma->vm_end >= vma->vm_mm->start_stack) continue; //stk
+// 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) continue; //heap
+// 		pr_info("pre vma\n");
+		
+// 		if (!vma->vm_file) {
+// 			// anon_name = anon_vma_name(vma);
+// 			pr_info("*===%s: %016lx %016lx %016lx===\n", "anon", vma->vm_start, vma->vm_end, vma->vm_mm);
+// 			continue;
+// 		} else {
+// 			name = get_file_name(vma->vm_file);
+// 			pr_info(".===%s: %016lx %016lx %016lx===\n", name, vma->vm_start, vma->vm_end, vma->vm_mm);
+// 		}
+
+// 		pr_info("start scan\n");
+// 		mm = vma->vm_mm;
+// 		mmap_write_lock(mm);
+// 		for (address = vma->vm_start; address < vma->vm_end; address = end) {
+// 			pgd = pgd_offset(mm, address);
+// 			end = (address + PGDIR_SIZE) & PGDIR_MASK;
+// 			if (pgd_none(*pgd) || pgd_bad(*pgd))
+// 				continue;
+
+// 			p4d = p4d_offset(pgd, address);
+// 			for (; address < end; address = (address + P4D_SIZE) & P4D_MASK) {
+// 				if (p4d_none(*p4d) || p4d_bad(*p4d))
+// 					continue;
+
+// 				pud = pud_offset(p4d, address);
+// 				for (; address < end; address = (address + PUD_SIZE) & PUD_MASK) {
+// 					if (pud_none(*pud) || pud_bad(*pud))
+// 						continue;
+
+// 					pmd = pmd_offset(pud, address);
+// 					for (; address < end; address = (address + PMD_SIZE) & PMD_MASK) {
+// 						if (pmd_none(*pmd) || pmd_bad(*pmd))
+// 							continue;
+
+// 						if (pmd_large(*pmd)) {
+// 							// Handle 2MB page...
+// 							continue;
+// 						}
+
+// 						pte = pte_offset_map(pmd, address);
+// 						for (; address < end; address += PAGE_SIZE) {
+// 							if (!pte || !pte_present(*pte))
+// 								continue;
+
+// 							// Handle the page...
+// 							// pte_unmap(pte);
+// 						}
+// 					}
+// 				}
+// 			}
+// 		}
+// 		mmap_write_unlock(mm);
+// 		pr_info("end scan, vma\n");
+// 	}
+// 	pr_info("end all scan\n");
+
+// 	return 0;
+// }
+int pte_entry(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk *walk) {
+    // Handle normal PTE entries
+    // ...
+	pr_info("\t\tpte addr:%016lx\n", addr);
+    return 0;
+}
+
+int pmd_entry(pmd_t *pmd, unsigned long addr, unsigned long next, struct mm_walk *walk) {
+    // Check if this PMD entry is a huge page
+    if (pmd_large(*pmd) || !pmd_present(*pmd)) {
+        // Handle huge page
+        // ...
+		pr_info("\t\tpmd addr:%016lx\n", addr);
+        return 1; // Return 1 to continue walking to the next level
+    }
+
+    // For regular PMD entries, the walk will continue to the PTE level
+    return 0; // Return 0 to continue walking
+}
+
+struct mm_walk_ops walk_ops = {
+    .pte_entry = pte_entry,
+    .pmd_entry = pmd_entry,
+    // Other callbacks as needed
+};
+
+
 int bpf_active_page_scan(int memcg_id, pid_t pid)
 {
 	int err = -EINVAL;
-	struct mem_cgroup *memcg = NULL;
-	struct blk_plug plug;
-	unsigned int flags;
-	unsigned int nid;
 	struct task_struct *tsk;
 	struct lruvec *lruvec;
 	struct mm_struct *mm;
 	struct vm_area_struct *vma;
-	const char *name;
-	char *temp_buffer;
-	struct scan_control sc = {
-		.may_writepage = true,
-		.may_unmap = true,
-		.may_swap = true,
-		.reclaim_idx = MAX_NR_ZONES - 1,
-		.gfp_mask = GFP_KERNEL,
-	};
-	struct lru_gen_mm_walk *walk;
-
+	char *name;
+	struct mm_walk walk = {};
 	
-
 	tsk = find_get_task_by_vpid(pid);
 	if (!tsk) return -EINVAL;
 	mm = get_task_mm(tsk);
 	if (!mm) return -EINVAL;
 
-	// if (mmap_read_trylock(mm)) {
-	// 	VMA_ITERATOR(vmi, mm, 0);
-	// 	for_each_vma(vmi, vma) {
-			
-	// 		if (!vma->vm_file) {
-	// 			// anon_name = anon_vma_name(vma);
-	// 			pr_info("===%s: %016lx %016lx===\n", "anon", vma->vm_start, vma->vm_end);
-	// 		} else {
-	// 			name = get_file_name(vma->vm_file);
-	// 			pr_info("===%s: %016lx %016lx===\n", name, vma->vm_start, vma->vm_end);
-	// 		}
-			
-	// 		// page walk
-	// 	}
-	// 	mmap_read_unlock(mm);
-	// }
 
-
-	if (!mem_cgroup_disabled()) {
-		rcu_read_lock();
-		memcg = mem_cgroup_from_id(memcg_id);
-#ifdef CONFIG_MEMCG
-		if (memcg && !css_tryget(&memcg->css))
-			memcg = NULL;
-#endif
-		rcu_read_unlock();
-
-		if (!memcg)
-			return -EINVAL;
-	}
-
-	if (memcg_id != mem_cgroup_id(memcg)) {
-		mem_cgroup_put(memcg);
-		return err;
-	}
-
-	set_task_reclaim_state(current, &sc.reclaim_state);
-	flags = memalloc_noreclaim_save();
-	blk_start_plug(&plug);
-	if (!set_mm_walk(NULL, true)) {
-		err = -ENOMEM;
-		goto done;
-	}
-walk = set_mm_walk(NULL, true);
-	for_each_online_node(nid) {
-		struct lruvec *lruvec = get_lruvec(memcg, nid);
-		DEFINE_MAX_SEQ(lruvec);
+	VMA_ITERATOR(vmi, mm, 0);
+	for_each_vma(vmi, vma) {
+		if (!vma->vm_mm) continue; //vdso
+		if (vma_is_anonymous(vma)) continue; // vdso
+		if (vma->vm_start <= vma->vm_mm->start_stack &&
+				vma->vm_end >= vma->vm_mm->start_stack) continue; //stk
+		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) continue; //heap
+		pr_info("pre vma\n");
 		
+		if (!vma->vm_file) {
+			// anon_name = anon_vma_name(vma);
+			pr_info("*===%s: %016lx %016lx %016lx===\n", "anon", vma->vm_start, vma->vm_end, vma->vm_mm);
+			continue;
+		} else {
+			name = get_file_name(vma->vm_file);
+			pr_info(".===%s: %016lx %016lx %016lx===\n", name, vma->vm_start, vma->vm_end, vma->vm_mm);
+		}
 
-		walk_mm(lruvec, mm, walk);
+		walk.mm = vma->vm_mm;
+		walk.ops = &walk_ops;
 
-		if (err)
-			goto done;
+		walk_page_vma(vma, &walk_ops, NULL);
 	}
-	
-
-	// lruvec = getlruvec(memcg, nid);
-
-	// walk_mm();
-
-
-done:
-	clear_mm_walk();
-	blk_finish_plug(&plug);
-	memalloc_noreclaim_restore(flags);
-	set_task_reclaim_state(current, NULL);
-	mem_cgroup_put(memcg);
-
 	return 0;
 }
 

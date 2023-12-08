@@ -19,6 +19,7 @@ static void sig_int(int signo)
 
 struct args {
 	int memcg_id;
+	int pid;
 };
 
 
@@ -26,16 +27,18 @@ int run_aging(int aging_fd, int memcg_id)
 {
 	struct args ctx = {
 		.memcg_id = memcg_id,
+		.pid = 243,
 	};
 	LIBBPF_OPTS(bpf_test_run_opts, tattr, .ctx_in = &ctx,
 		    .ctx_size_in = sizeof(ctx));
 	return bpf_prog_test_run_opts(aging_fd, &tattr);
 }
 
-int run_active_scan(int scan_fd, int pid)
+int run_active_scan(int scan_fd, int memcg_id, int pid)
 {
 	struct args ctx = {
-		.memcg_id = pid,
+		.memcg_id = memcg_id,
+		.pid = pid,
 	};
 	LIBBPF_OPTS(bpf_test_run_opts, tattr, .ctx_in = &ctx,
 		    .ctx_size_in = sizeof(ctx));
@@ -102,27 +105,28 @@ int main(int argc, char **argv)
 	printf("start tracing\n");
 	
 	int c = 1;
-	// while (!stop) {
-	// 	run_aging(memcg_aging_fd, 2);
-	// 	sleep(12);
-	// }
-	run_active_scan(memcg_aging_fd, 247);
-    // while (!stop) {
-	// 	// sleep(1);
-	// 	// run_aging(memcg_aging_fd, c++);
+	while (!stop) {
+		// run_aging(memcg_aging_fd, 2);
+		run_active_scan(memcg_aging_fd, 2, 243);
+		sleep(120);
+	}
+	// run_active_scan(memcg_aging_fd, 2, 243);
+    while (!stop) {
+		// sleep(1);
+		// run_aging(memcg_aging_fd, c++);
 
-	// 	// if (c == 10000) goto cleanup;
-	// 	// sleep(1);
+		// if (c == 10000) goto cleanup;
+		// sleep(1);
 		
-	// 	static char buf[4096];
-	// 	ssize_t sz;
-	// 	sz = read(trace_fd, buf, sizeof(buf) - 1);
-	// 	if (sz > 0) {
-	// 		buf[sz] = '\0';
-	// 		// printf("trace: %s\n", buf);
-	// 		puts(buf);
-	// 	}
-    // }
+		static char buf[4096];
+		ssize_t sz;
+		sz = read(trace_fd, buf, sizeof(buf) - 1);
+		if (sz > 0) {
+			buf[sz] = '\0';
+			// printf("trace: %s\n", buf);
+			puts(buf);
+		}
+    }
 
 
     cleanup:

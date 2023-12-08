@@ -68,7 +68,7 @@ int BPF_PROG(fentry_mglru_pmd_probe, pid_t pid, unsigned int nid,
 
 extern int bpf_run_aging(int memcg_id, bool can_swap, bool force_scan) __ksym;
 
-extern int bpf_active_page_scan(int pid) __ksym;
+extern int bpf_active_page_scan(int memcg_id, pid_t pid) __ksym;
 
 struct args {
 	int memcg_id;
