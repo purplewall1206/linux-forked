@@ -31,40 +31,45 @@ int target_pid = 0;
 //     return 0;
 // }
 
-SEC("fentry/mglru_pte_probe")
-int BPF_PROG(fentry_mglru_pte_probe, pid_t pid, unsigned int nid,
-	     unsigned long addr, unsigned long len, bool anon)
+
+// __weak noinline void active_scan_pte_probe(pte_t *pte, unsigned long addr, char *vmaname, int vma_index)
+SEC("fentry/active_scan_pte_probe")
+int BPF_PROG(fentry_mglru_pte_probe, pte_t *pte, unsigned long addr, char *vmaname, int vma_index)
 {
 	int err = 0;
-    char name[32];
+    // char name[32];
 
 	// if (pid != target_pid)
 	// 	return 0;
 	// err = probe(nid, addr, len, anon);
-    bpf_get_current_comm(name, 32);
-    bpf_printk("PTE called addr:0x%lx len:%lu, comm:%s\n", addr, len, name);
+	if (vmaname == NULL) {
+		bpf_printk("PTE: %016lx, %d, %s\n", addr, vma_index, "anon");
+	} else {
+		bpf_printk("PTE: %016lx, %d, %s\n", addr, vma_index, vmaname);
+	}
+    
 	if (err)
 		bpf_printk("PTE called addr:0x%lx len:%lu error:%ld", addr, len,
 			   err);
 	return 0;
 }
 
-SEC("fentry/mglru_pmd_probe")
-int BPF_PROG(fentry_mglru_pmd_probe, pid_t pid, unsigned int nid,
-	     unsigned long addr, unsigned long len, bool anon)
-{
-	int err = 0;
-	char name[32];
-	// if (pid != target_pid)
-	// 	return 0;
-	// err = probe(nid, addr, len, anon);
-	bpf_get_current_comm(name, 32);
-	bpf_printk("PMD called addr:0x%lx len:%lu, comm:%s\n", addr, len, name);
-	if (err)
-		bpf_printk("PMD called addr:0x%lx len:%lu error:%ld", addr, len,
-			   err);
-	return 0;
-}
+// SEC("fentry/mglru_pmd_probe")
+// int BPF_PROG(fentry_mglru_pmd_probe, pid_t pid, unsigned int nid,
+// 	     unsigned long addr, unsigned long len, bool anon)
+// {
+// 	int err = 0;
+// 	char name[32];
+// 	// if (pid != target_pid)
+// 	// 	return 0;
+// 	// err = probe(nid, addr, len, anon);
+// 	bpf_get_current_comm(name, 32);
+// 	bpf_printk("PMD called addr:0x%lx len:%lu, comm:%s\n", addr, len, name);
+// 	if (err)
+// 		bpf_printk("PMD called addr:0x%lx len:%lu error:%ld", addr, len,
+// 			   err);
+// 	return 0;
+// }
 
 extern int bpf_run_aging(int memcg_id, bool can_swap, bool force_scan) __ksym;
 
