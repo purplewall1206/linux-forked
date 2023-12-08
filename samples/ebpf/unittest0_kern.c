@@ -49,8 +49,7 @@ int BPF_PROG(fentry_mglru_pte_probe, pte_t *pte, unsigned long addr, char *vmana
 	}
     
 	if (err)
-		bpf_printk("PTE called addr:0x%lx len:%lu error:%ld", addr, len,
-			   err);
+		bpf_printk("PTE called addr:0x%lx index:%d error:%ld", addr, vma_index, err);
 	return 0;
 }
 
