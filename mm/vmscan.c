@@ -6204,7 +6204,7 @@ done:
 	return err;
 }
 
-const char *get_file_name(struct file *file) {
+char *bpf_get_file_name(struct file *file) {
     struct dentry *dentry;
 
     if (!file)
@@ -6227,16 +6227,18 @@ const char *get_file_name(struct file *file) {
 
 // };
 
-// __weak noinline void active_scan_pte_probe(struct )
-// {
 
-// }
 
-// __weak noinline void active_scan_pmd_probe(unsigned long addr,
-// 				     unsigned long len, bool anon)
-// {
+// if name is NULL->anon, otherwise->file page cache.
+__weak noinline void active_scan_pte_probe(pte_t *pte, unsigned long addr, struct vm_area_struct *vma)
+{
 
-// }
+}
+
+__weak noinline void active_scan_pmd_probe(pmd_t *pmd, unsigned long addr, struct vm_area_struct *vma)
+{
+
+}
 
 
 int pte_entry(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk *walk) {
@@ -6244,18 +6246,22 @@ int pte_entry(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk
     // ...
 	// pr_info("\t\tpte addr:%016lx\n", addr);
 
-	if (!ptep_test_and_clear_young(walk->vma, addr, pte)) {
-		active_scan_pte_probe()
+	if (ptep_test_and_clear_young(walk->vma, addr, pte)) {
+		active_scan_pte_probe(pte, addr, walk->vma);
 	}
     return 0;
 }
 
 int pmd_entry(pmd_t *pmd, unsigned long addr, unsigned long next, struct mm_walk *walk) {
     // Check if this PMD entry is a huge page
-    if (pmd_large(*pmd) || !pmd_present(*pmd)) {
+
+    if (pmd_large(*pmd) || pmd_trans_huge(*pmd) || !pmd_present(*pmd)) {
         // Handle huge page
         // ...
-		pr_info("\t\tpmd addr:%016lx\n", addr);
+		// pr_info("\t\tpmd addr:%016lx\n", addr);
+		if (pmdp_test_and_clear_young(walk->vma, addr, pmd)) {
+			active_scan_pmd_probe(pmd, addr, walk->vma);
+		}
         return 1; // Return 1 to continue walking to the next level
     }
 
@@ -6288,21 +6294,24 @@ int bpf_active_page_scan(int memcg_id, pid_t pid)
 
 	VMA_ITERATOR(vmi, mm, 0);
 	for_each_vma(vmi, vma) {
-		if (!vma->vm_mm) continue; //vdso
-		if (vma_is_anonymous(vma)) continue; // vdso
+		// if (!vma->vm_mm) continue; //vdso
+		// if (vma_is_anonymous(vma)) continue; // vdso
+		if (vma->vm_flags & VM_EXEC) continue; // exec memory will not swapped
+		if ((vma->vm_flags & VM_READ) && !(vma->vm_flags & VM_WRITE)) continue; // read-only memory will be deleted rather than swaped
+		if (vma->vm_flags & VM_NONE) continue; // none
 		if (vma->vm_start <= vma->vm_mm->start_stack &&
 				vma->vm_end >= vma->vm_mm->start_stack) continue; //stk
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) continue; //heap
-		pr_info("pre vma\n");
 		
-		if (!vma->vm_file) {
-			// anon_name = anon_vma_name(vma);
-			pr_info("*===%s: %016lx %016lx %016lx===\n", "anon", vma->vm_start, vma->vm_end, vma->vm_mm);
-			continue;
-		} else {
-			name = get_file_name(vma->vm_file);
-			pr_info(".===%s: %016lx %016lx %016lx===\n", name, vma->vm_start, vma->vm_end, vma->vm_mm);
-		}
+		// pr_info("pre vma\n");
+		
+		// if (!vma->vm_file) {
+		// 	// anon_name = anon_vma_name(vma);
+		// 	pr_info("*===%s: %016lx %016lx %016lx %016lx===\n", "anon", vma->vm_start, vma->vm_end, vma->vm_mm, vma->vm_flags);
+		// } else {
+		// 	name = get_file_name(vma->vm_file);
+		// 	pr_info(".===%s: %016lx %016lx %016lx %016lx===\n", name, vma->vm_start, vma->vm_end, vma->vm_mm, vma->vm_flags);
+		// }
 
 		walk.mm = vma->vm_mm;
 		walk.ops = &walk_ops;
@@ -6319,6 +6328,7 @@ BTF_SET8_END(bpf_lru_gen_trace_kfunc_ids)
 BTF_SET8_START(bpf_lru_gen_syscall_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_run_aging)
 BTF_ID_FLAGS(func, bpf_active_page_scan)
+BTF_ID_FLAGS(func, bpf_get_file_name)
 BTF_SET8_END(bpf_lru_gen_syscall_kfunc_ids)
 
 static const struct btf_kfunc_id_set bpf_lru_gen_trace_kfunc_set = {

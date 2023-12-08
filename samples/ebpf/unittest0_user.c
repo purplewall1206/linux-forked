@@ -10,6 +10,10 @@
 #include <fcntl.h>
 
 static volatile sig_atomic_t stop;
+int scan_interval = 0;
+int memcg_aging_fd;
+int target_pid;
+
 
 static void sig_int(int signo)
 {
@@ -45,16 +49,34 @@ int run_active_scan(int scan_fd, int memcg_id, int pid)
 	return bpf_prog_test_run_opts(scan_fd, &tattr);
 }
 
+void poll()
+{
+	// int c = 1;
+	while (!stop) {
+		// run_aging(memcg_aging_fd, 2);
+		run_active_scan(memcg_aging_fd, 2, target_pid);
+		sleep(scan_interval);
+	}
+}
+
 // cat /sys/kernel/debug/tracing/trace_pipe
 int main(int argc, char **argv)
 {
     struct bpf_link *links[2];
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	int memcg_aging_fd;
+	
 	char filename[256];
 	int j = 0;
 	int trace_fd;
+
+	if (argc < 3) {
+		printf("usage: ./xxx <pid> <sampling interval(sec)>\n");
+		return -1;
+	}
+
+	target_pid = atoi(argv[1]);
+	scan_interval = atoi(argv[2]);
 	
 	trace_fd = open("/sys/kernel/debug/tracing/trace_pipe", O_RDONLY, 0);
 	if (trace_fd < 0) {
@@ -103,13 +125,15 @@ int main(int argc, char **argv)
 
 	
 	printf("start tracing\n");
+
+	pthread_t thread;
+    if (pthread_create(&thread, NULL, poll, NULL) != 0) {
+        perror("Failed to create thread");
+        return 1;
+    }
+    pthread_detach(thread, NULL);
 	
-	int c = 1;
-	while (!stop) {
-		// run_aging(memcg_aging_fd, 2);
-		run_active_scan(memcg_aging_fd, 2, 243);
-		sleep(120);
-	}
+	
 	// run_active_scan(memcg_aging_fd, 2, 243);
     while (!stop) {
 		// sleep(1);
@@ -129,12 +153,12 @@ int main(int argc, char **argv)
     }
 
 
-    cleanup:
-		for (j--; j >= 0; j--)
-			bpf_link__destroy(links[j]);
-	    bpf_object__close(obj);
-		close(trace_fd);
-        return 0;
+cleanup:
+	for (j--; j >= 0; j--)
+		bpf_link__destroy(links[j]);
+	bpf_object__close(obj);
+	close(trace_fd);
+	return 0;
 
 
 
