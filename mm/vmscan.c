@@ -6349,11 +6349,10 @@ int bpf_active_page_scan(int memcg_id, pid_t pid)
 
 BTF_SET8_START(bpf_lru_gen_trace_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_set_skip_mm)
-
+BTF_ID_FLAGS(func, bpf_get_vma_id)
 BTF_SET8_END(bpf_lru_gen_trace_kfunc_ids)
 
 BTF_SET8_START(bpf_lru_gen_syscall_kfunc_ids)
-BTF_ID_FLAGS(func, bpf_get_vma_id)
 BTF_ID_FLAGS(func, bpf_run_aging)
 BTF_ID_FLAGS(func, bpf_active_page_scan)
 BTF_SET8_END(bpf_lru_gen_syscall_kfunc_ids)

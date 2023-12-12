@@ -64,8 +64,8 @@ int get_page_index_vma(unsigned long addr, struct vm_area_struct *vma, bool ispm
 {
 	unsigned long start = BPF_CORE_READ(vma, vm_start);
 	unsigned long end = BPF_CORE_READ(vma, vm_end);
-	unsigned long step = (end - start) / (ispmd ? PAGE_SIZE*4096 : PAGE_SIZE);
-	return (addr - start) / step;
+	// unsigned long step = (end - start) / (ispmd ? PAGE_SIZE*4096 : PAGE_SIZE);
+	return (addr - start) / (ispmd ? PAGE_SIZE*4096 : PAGE_SIZE);
 }
 
 extern int bpf_get_vma_id(struct vm_area_struct *vma, char *buf)__ksym;
@@ -124,6 +124,8 @@ struct args {
 	int pid;
 };
 
+int c = 0;
+
 SEC("syscall")
 int memcg_run_aging(struct args *ctx)
 {
@@ -133,11 +135,9 @@ int memcg_run_aging(struct args *ctx)
 	err = bpf_active_page_scan(ctx->memcg_id, ctx->pid);
 
 	if (err != 0) {
-		// bpf_printk("aging failed for memcg %ld with error %d",
-		// 	   ctx->memcg_id, err);
 		return 0;
 	}
-	bpf_printk("aging succeeded for memcg %ld", ctx->memcg_id);
+	bpf_printk("scaned %d times", ++c);
 	return 0;
 }
 

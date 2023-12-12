@@ -8,6 +8,7 @@
 #include <bpf/bpf.h>
 #include <bpf/btf.h>
 #include <fcntl.h>
+#include <time.h>
 
 #define VM_READ		0x00000001	/* currently active flags */
 #define VM_WRITE	0x00000002
@@ -21,6 +22,7 @@ int target_pid;
 int rb_fd = 0;
 int scan_times = 0;
 int trace_fd;
+FILE *f_sample;
 
 struct event
 {
@@ -94,8 +96,13 @@ static int handle_rb(void *ctx, void *data, size_t data_sz)
 	if ((e->vm_flags & VM_READ) && !((e->vm_flags & VM_EXEC) || (e->vm_flags & VM_WRITE))) return 0;
 	// 3. remove .so
 	if (strstr(e->id, ".so") != NULL) return 0;
+	// 4. remove vdso
+	if (strstr(e->id, "anon-") != NULL && (e->vm_flags & VM_EXEC)) return 0;
 
-	printf("%d, %s, %016lx, %d, %d\n", scan_times, e->id, e->addr, e->index, e->accessed);
+	unsigned long pteprot = e->pteprot & (unsigned long) 0xffff000000000fff;
+
+	// printf("%d, %s, %016lx, %d, %d\n", scan_times, e->id, e->addr, e->index, e->accessed);
+	fprintf(f_sample, "%d,%s,%016lx,%016lx,%016lx,%d,%016lx,%016lx,%d\n", scan_times, e->id, e->addr, e->start, e->end, e->index, pteprot, e->vm_flags, e->accessed);
 	return 0;
 }
 
@@ -179,6 +186,20 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
+	time_t rawtime;
+	struct tm * timeinfo;
+
+	time ( &rawtime );
+	timeinfo = localtime ( &rawtime );
+	char timebuf[80];
+	strftime(timebuf, sizeof(timebuf), "%Y-%m-%d-%H-%M", timeinfo);
+	snprintf(filename, sizeof(filename), "sample-%dsec-%s.csv", scan_interval, timebuf);
+	f_sample = fopen(filename, "w");
+	if (f_sample == NULL) {
+		fprintf(stderr, "Failed to create f_sample_file\n");
+		goto cleanup;
+	}
+
     printf("Please run `sudo cat /sys/kernel/debug/tracing/trace_pipe` "
 	       "to see output of the BPF programs.\n");
 
@@ -217,6 +238,7 @@ cleanup:
 		bpf_link__destroy(links[j]);
 	bpf_object__close(obj);
 	close(trace_fd);
+	close(f_sample);
 	return 0;
 
 
