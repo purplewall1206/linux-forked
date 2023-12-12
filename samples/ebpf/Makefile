@@ -8,6 +8,7 @@ pound := \#
 # List of programs to build
 tprogs-y += unittest0
 tprogs-y += unittest1
+tprogs-y += accessed_page_sample
 
 
 
@@ -25,6 +26,7 @@ XDP_SAMPLE := xdp_sample_user.o
 
 unittest0-objs := unittest0_user.o
 unittest1-objs := unittest1_user.o
+accessed_page_sample-objs := accessed_page_sample_user.o
 
 
 
@@ -34,6 +36,7 @@ unittest1-objs := unittest1_user.o
 always-y := $(tprogs-y)
 always-y += unittest0_kern.o
 always-y += unittest1_kern.o
+always-y += accessed_page_sample_kern.o
 
 
 

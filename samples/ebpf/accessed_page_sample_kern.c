@@ -39,28 +39,26 @@ struct vm_area_struct {
         /* last cacheline: 40 bytes */
 };
 
-// SEC("kprobe/__kmalloc")
-// int bpf_prog1(struct pt_regs *ctx)
-// {
-//     ++count;
-//     // if (count % 10 == 0)
-//         bpf_printk("--%d--\n", count);
-//     return 0;
-// }
+struct event
+{
+	char id[128];
+	unsigned long start;
+	unsigned long end;
+	unsigned long addr;
+	unsigned long pteprot;
+	unsigned long vm_flags;
+	int ispmd;
+	int accessed;
+	int index;
+};
 
-// ffffffff813916f0 <single_open>:
-// ...
-// ffffffff8139171a:       e8 31 f6 f1 ff          call   ffffffff812b0d50 <kmalloc_trace> ffffffff8139171b: R_X86_64_PLT32        kmalloc_trace-0x4
-// ffffffff8139171f:       48 85 c0                test   %rax,%rax
 
-// python3 -c 'print(hex(0xffffffff8139171a-0xffffffff813916f0))'
-// SEC("kprobe/single_open+0x5")
-// int BPF_KPROBE(prog2)
-// {
-//     bpf_printk("===%lx===\n", ctx->ip);
-//     return 0;
-// }
-// #define PAGE_SIZE 4096
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, sizeof(struct event) * 102400);
+} rb SEC(".maps");
+
+
 
 int get_page_index_vma(unsigned long addr, struct vm_area_struct *vma, bool ispmd)
 {
@@ -74,53 +72,46 @@ extern int bpf_get_vma_id(struct vm_area_struct *vma, char *buf)__ksym;
 
 // __weak noinline void active_scan_pte_probe(pte_t *pte, unsigned long addr, struct vm_area_struct *vma, bool accessed)
 SEC("fentry/active_scan_pte_probe")
-int BPF_PROG(fentry_mglru_pte_probe, pte_t *pte, unsigned long addr, struct vm_area_struct *vma, bool accessed)
+int BPF_PROG(fentry_mglru_pte_probe, unsigned long pte, unsigned long addr, struct vm_area_struct *vma, bool accessed)
 {
-	int err = 0;
-	unsigned long start = BPF_CORE_READ(vma, vm_start);
-	unsigned long end = BPF_CORE_READ(vma, vm_end);
-	unsigned long f = (unsigned long)BPF_CORE_READ(vma, vm_file);
-	unsigned long flags = (u64) BPF_CORE_READ(vma, vm_flags);
-	int index = get_page_index_vma(addr, vma, false);
-	// char *name = NULL;
-    char id[64];
+	struct event *e;
 
-	// if (pid != target_pid)
-	// 	return 0;
-	// err = probe(nid, addr, len, anon);
-	// bool anon = BPF_CORE_READ(vma, vm_file) == NULL ? true : false;
-	// int index = get_page_index_vma(addr, vma, false);
-		err = bpf_get_vma_id(vma, id);
-	// 	bpf_printk("\t\tfile: %s, err: %d\n", id, err);
-		
-	
-	// if (name)
-		bpf_printk("PTE: id:%s, index: %d, %016lx", id, index, flags);
-	// else 
-	// 	bpf_printk("PTE: addr:%016lx, index: %d, %d", addr, index, accessed);
+	e = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+	if (!e)
+		return 0;
+	bpf_get_vma_id(vma, e->id);
+	e->addr = addr;
+	e->start = BPF_CORE_READ(vma, vm_start);
+	e->end = BPF_CORE_READ(vma, vm_end);
+	e->pteprot = pte & (unsigned long) 0xffff000000000fff;
+	e->vm_flags = vma->vm_flags;
+	e->ispmd = 0;
+	e->accessed = accessed;
+	e->index =  get_page_index_vma(addr, vma, false);
 
-	// if (err)
-	// 	bpf_printk("PTE called addr:0x%lx index:%d error:%ld", addr, index, err);
+	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
 
 SEC("fentry/active_scan_pmd_probe")
-int BPF_PROG(fentry_mglru_pmd_probe,pmd_t *pmd, unsigned long addr, struct vm_area_struct *vma, bool accessed)
+int BPF_PROG(fentry_mglru_pmd_probe,unsigned long pmd, unsigned long addr, struct vm_area_struct *vma, bool accessed)
 {
-	int err = 0;
-	unsigned long start = BPF_CORE_READ(vma, vm_start);
-	unsigned long end = BPF_CORE_READ(vma, vm_end);
-	unsigned long f = (unsigned long)BPF_CORE_READ(vma, vm_file);
-	unsigned long flags = (u64) BPF_CORE_READ(vma, vm_flags);
-	int index = get_page_index_vma(addr, vma, true);
-    char id[64];
+	struct event *e;
 
+	e = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+	if (!e)
+		return 0;
+	bpf_get_vma_id(vma, e->id);
+	e->addr = addr;
+	e->start = BPF_CORE_READ(vma, vm_start);
+	e->end = BPF_CORE_READ(vma, vm_end);
+	e->pteprot = pmd & (unsigned long) 0xffff000000000fff;
+	e->vm_flags = vma->vm_flags;
+	e->ispmd = 1;
+	e->accessed = accessed;
+	e->index =  get_page_index_vma(addr, vma, true);
 
-		err = bpf_get_vma_id(vma, id);
-		
-	
-	// if (name)
-		bpf_printk("PMD: id:%s, index: %d, %016lx", id, index, flags);
+	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
 

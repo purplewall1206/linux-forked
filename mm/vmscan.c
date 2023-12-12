@@ -6204,18 +6204,40 @@ done:
 	return err;
 }
 
-char *bpf_get_file_name(struct file *file) {
+// stored in the char *buf
+int bpf_get_vma_id(struct vm_area_struct *vma, char *buf) {
+	char truncated_name[64+1] = {};
+	char rwx[4] = "---";
     struct dentry *dentry;
+	struct file *file = vma->vm_file;
+	vm_flags_t flags = vma->vm_flags;
+	if (flags & VM_READ) rwx[0] = 'r'; // Read permission
+    if (flags & VM_WRITE) rwx[1] = 'w'; // Write permission
+    if (flags & VM_EXEC) rwx[2] = 'x'; // Execute permission
 
-    if (!file)
-        return NULL;
-
+    if (!file) {
+		snprintf(truncated_name, 64, "%s", "anon");
+		snprintf(buf, 128, "%s-%016lx-%s", truncated_name, (unsigned long)vma, rwx);
+		return 0;
+	}
+    
     dentry = file->f_path.dentry;
-    if (!dentry)
-        return NULL;
-
+    if (!dentry) {
+		snprintf(truncated_name, 64, "%s", "empty-dentry");
+		snprintf(buf, 128, "%s-%016lx-%s", truncated_name, (unsigned long)vma, rwx);
+		return 0;
+	}
+	
     // dentry->d_name.name contains the name of the file
-    return dentry->d_name.name;
+    if (dentry->d_name.name != NULL) {
+		// strncpy(buf, dentry->d_name.name, 32);
+		snprintf(truncated_name, 64, "%s", dentry->d_name.name);
+	} else {
+		snprintf(truncated_name, 64, "%s", "empty-name");
+	}
+
+	snprintf(buf, 128, "%s-%016lx-%s", truncated_name, (unsigned long)vma, rwx);
+	return 0;
 }
 
 // struct active_scan_args
@@ -6230,12 +6252,12 @@ char *bpf_get_file_name(struct file *file) {
 
 
 // if name is NULL->anon, otherwise->file page cache.
-__weak noinline void active_scan_pte_probe(pte_t *pte, unsigned long addr, struct vm_area_struct *vma)
+__weak noinline void active_scan_pte_probe(unsigned long pte, unsigned long addr, struct vm_area_struct *vma, bool accessed)
 {
 
 }
 
-__weak noinline void active_scan_pmd_probe(pmd_t *pmd, unsigned long addr, struct vm_area_struct *vma)
+__weak noinline void active_scan_pmd_probe(unsigned long pmd, unsigned long addr, struct vm_area_struct *vma, bool accessed)
 {
 
 }
@@ -6245,23 +6267,27 @@ int pte_entry(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk
     // Handle normal PTE entries
     // ...
 	// pr_info("\t\tpte addr:%016lx\n", addr);
-
+	bool accessed = false;
 	if (ptep_test_and_clear_young(walk->vma, addr, pte)) {
-		active_scan_pte_probe(pte, addr, walk->vma);
-	}
+		accessed = true;	
+	} 
+	active_scan_pte_probe((unsigned long)(pte->pte), addr, walk->vma, accessed);
     return 0;
 }
 
 int pmd_entry(pmd_t *pmd, unsigned long addr, unsigned long next, struct mm_walk *walk) {
     // Check if this PMD entry is a huge page
 
-    if (pmd_large(*pmd) || pmd_trans_huge(*pmd) || !pmd_present(*pmd)) {
+    if (pmd_large(*pmd) || pmd_trans_huge(*pmd) ) {
         // Handle huge page
         // ...
 		// pr_info("\t\tpmd addr:%016lx\n", addr);
+		bool accessed = false;
 		if (pmdp_test_and_clear_young(walk->vma, addr, pmd)) {
-			active_scan_pmd_probe(pmd, addr, walk->vma);
+			accessed = true;
 		}
+		active_scan_pmd_probe((unsigned long)(pmd->pmd), addr, walk->vma, true);
+		pr_info("------pmd-%016lx---------\n", addr);
         return 1; // Return 1 to continue walking to the next level
     }
 
@@ -6296,9 +6322,9 @@ int bpf_active_page_scan(int memcg_id, pid_t pid)
 	for_each_vma(vmi, vma) {
 		// if (!vma->vm_mm) continue; //vdso
 		// if (vma_is_anonymous(vma)) continue; // vdso
-		if (vma->vm_flags & VM_EXEC) continue; // exec memory will not swapped
-		if ((vma->vm_flags & VM_READ) && !(vma->vm_flags & VM_WRITE)) continue; // read-only memory will be deleted rather than swaped
-		if (vma->vm_flags & VM_NONE) continue; // none
+		// if (vma->vm_flags & VM_EXEC) continue; // exec memory will not swapped
+		// if ((vma->vm_flags & VM_READ) && !(vma->vm_flags & VM_WRITE)) continue; // read-only memory will be deleted rather than swaped
+		// if (vma->vm_flags & VM_NONE) continue; // none
 		if (vma->vm_start <= vma->vm_mm->start_stack &&
 				vma->vm_end >= vma->vm_mm->start_stack) continue; //stk
 		if (vma->vm_start <= mm->brk && vma->vm_end >= mm->start_brk) continue; //heap
@@ -6323,12 +6349,13 @@ int bpf_active_page_scan(int memcg_id, pid_t pid)
 
 BTF_SET8_START(bpf_lru_gen_trace_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_set_skip_mm)
+
 BTF_SET8_END(bpf_lru_gen_trace_kfunc_ids)
 
 BTF_SET8_START(bpf_lru_gen_syscall_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_get_vma_id)
 BTF_ID_FLAGS(func, bpf_run_aging)
 BTF_ID_FLAGS(func, bpf_active_page_scan)
-BTF_ID_FLAGS(func, bpf_get_file_name)
 BTF_SET8_END(bpf_lru_gen_syscall_kfunc_ids)
 
 static const struct btf_kfunc_id_set bpf_lru_gen_trace_kfunc_set = {
