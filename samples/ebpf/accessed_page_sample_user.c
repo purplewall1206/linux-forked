@@ -91,13 +91,13 @@ static int handle_rb(void *ctx, void *data, size_t data_sz)
 
 	// skip list
 	// 1. remove shared
-	if (e->vm_flags & VM_SHARED) return 0;
-	// 2. remove ro
-	if ((e->vm_flags & VM_READ) && !((e->vm_flags & VM_EXEC) || (e->vm_flags & VM_WRITE))) return 0;
-	// 3. remove .so
-	if (strstr(e->id, ".so") != NULL) return 0;
-	// 4. remove vdso
-	if (strstr(e->id, "anon-") != NULL && (e->vm_flags & VM_EXEC)) return 0;
+	// if (e->vm_flags & VM_SHARED) return 0;
+	// // 2. remove ro
+	// if ((e->vm_flags & VM_READ) && !((e->vm_flags & VM_EXEC) || (e->vm_flags & VM_WRITE))) return 0;
+	// // 3. remove .so
+	// if (strstr(e->id, ".so") != NULL) return 0;
+	// // 4. remove vdso
+	// if (strstr(e->id, "anon-") != NULL && (e->vm_flags & VM_EXEC)) return 0;
 
 	unsigned long pteprot = e->pteprot & (unsigned long) 0xffff000000000fff;
 
