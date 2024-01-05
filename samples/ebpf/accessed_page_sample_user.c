@@ -32,9 +32,10 @@ struct event
 	unsigned long addr;
 	unsigned long pteprot;
 	unsigned long vm_flags;
-	int ispmd;
+	int ishuge;
 	int accessed;
 	int index;
+	int pte_level; // pud2 pmd1 pte0
 };
 
 
@@ -100,6 +101,7 @@ static int handle_rb(void *ctx, void *data, size_t data_sz)
 	// if (strstr(e->id, "anon-") != NULL && (e->vm_flags & VM_EXEC)) return 0;
 
 	unsigned long pteprot = e->pteprot & (unsigned long) 0xffff000000000fff;
+	if (e->pte_level != 0) return 1;
 
 	// printf("%d, %s, %016lx, %d, %d\n", scan_times, e->id, e->addr, e->index, e->accessed);
 	fprintf(f_sample, "%d,%s,%016lx,%016lx,%016lx,%d,%016lx,%016lx,%d\n", scan_times, e->id, e->addr, e->start, e->end, e->index, pteprot, e->vm_flags, e->accessed);

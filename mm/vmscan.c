@@ -6262,6 +6262,10 @@ __weak noinline void active_scan_pmd_probe(unsigned long pmd, unsigned long addr
 
 }
 
+__weak noinline void active_scan_pud_probe(unsigned long pud, unsigned long addr, struct vm_area_struct *vma, bool accessed)
+{
+
+}
 
 int pte_entry(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk *walk) {
     // Handle normal PTE entries
@@ -6278,7 +6282,7 @@ int pte_entry(pte_t *pte, unsigned long addr, unsigned long next, struct mm_walk
 int pmd_entry(pmd_t *pmd, unsigned long addr, unsigned long next, struct mm_walk *walk) {
     // Check if this PMD entry is a huge page
 
-    if (pmd_large(*pmd) || pmd_trans_huge(*pmd) ) {
+    // if (pmd_large(*pmd) || pmd_trans_huge(*pmd) ) {
         // Handle huge page
         // ...
 		// pr_info("\t\tpmd addr:%016lx\n", addr);
@@ -6287,17 +6291,30 @@ int pmd_entry(pmd_t *pmd, unsigned long addr, unsigned long next, struct mm_walk
 			accessed = true;
 		}
 		active_scan_pmd_probe((unsigned long)(pmd->pmd), addr, walk->vma, true);
-		pr_info("------pmd-%016lx---------\n", addr);
-        return 1; // Return 1 to continue walking to the next level
-    }
+		// pr_info("------pmd-%016lx---------\n", addr);
+        // return 1; // Return 1 to continue walking to the next level
+    // }
 
     // For regular PMD entries, the walk will continue to the PTE level
+    return 0; // Return 0 to continue walking
+}
+
+int pud_entry(pud_t *pud, unsigned long addr, unsigned long next, struct mm_walk *walk) {
+    // Check if this PMD entry is a huge page
+	bool accessed = false;
+	if (pudp_test_and_clear_young(walk->vma, addr, pud)) {
+		accessed = true;
+	}
+	active_scan_pud_probe((unsigned long)(pud->pud), addr, walk->vma, true);
+	// pr_info("------pmd-%016lx---------\n", addr);
+    
     return 0; // Return 0 to continue walking
 }
 
 struct mm_walk_ops walk_ops = {
     .pte_entry = pte_entry,
     .pmd_entry = pmd_entry,
+	.pud_entry = pud_entry,
     // Other callbacks as needed
 };
 

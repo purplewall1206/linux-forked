@@ -47,9 +47,10 @@ struct event
 	unsigned long addr;
 	unsigned long pteprot;
 	unsigned long vm_flags;
-	int ispmd;
+	int ishuge;
 	int accessed;
 	int index;
+	int pte_level; // pud2 pmd1 pte0
 };
 
 
@@ -65,7 +66,10 @@ int get_page_index_vma(unsigned long addr, struct vm_area_struct *vma, bool ispm
 	unsigned long start = BPF_CORE_READ(vma, vm_start);
 	unsigned long end = BPF_CORE_READ(vma, vm_end);
 	// unsigned long step = (end - start) / (ispmd ? PAGE_SIZE*4096 : PAGE_SIZE);
-	return (addr - start) / (ispmd ? PAGE_SIZE*4096 : PAGE_SIZE);
+	if (ispmd < 2)
+		return (addr - start) / (ispmd ? PAGE_SIZE*4096 : PAGE_SIZE);
+	else
+		return (addr - start) / (PAGE_SIZE * 4096 * 4096);
 }
 
 extern int bpf_get_vma_id(struct vm_area_struct *vma, char *buf)__ksym;
@@ -85,13 +89,17 @@ int BPF_PROG(fentry_mglru_pte_probe, unsigned long pte, unsigned long addr, stru
 	e->end = BPF_CORE_READ(vma, vm_end);
 	e->pteprot = pte & (unsigned long) 0xffff000000000fff;
 	e->vm_flags = vma->vm_flags;
-	e->ispmd = 0;
+	e->ishuge = 0;
 	e->accessed = accessed;
 	e->index =  get_page_index_vma(addr, vma, false);
+	e->pte_level = 0;
 
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
+
+#define _PAGE_BIT_PSE		7
+#define _PAGE_PSE			((unsigned long) 1 << _PAGE_BIT_PSE)
 
 SEC("fentry/active_scan_pmd_probe")
 int BPF_PROG(fentry_mglru_pmd_probe,unsigned long pmd, unsigned long addr, struct vm_area_struct *vma, bool accessed)
@@ -107,9 +115,34 @@ int BPF_PROG(fentry_mglru_pmd_probe,unsigned long pmd, unsigned long addr, struc
 	e->end = BPF_CORE_READ(vma, vm_end);
 	e->pteprot = pmd & (unsigned long) 0xffff000000000fff;
 	e->vm_flags = vma->vm_flags;
-	e->ispmd = 1;
+	e->ishuge = (pmd & _PAGE_PSE > 0) ? 1 : 0;
 	e->accessed = accessed;
 	e->index =  get_page_index_vma(addr, vma, true);
+	e->pte_level = 1;
+
+	bpf_ringbuf_submit(e, 0);
+	return 0;
+}
+
+
+SEC("fentry/active_scan_pud_probe")
+int BPF_PROG(fentry_mglru_pud_probe,unsigned long pud, unsigned long addr, struct vm_area_struct *vma, bool accessed)
+{
+	struct event *e;
+
+	e = bpf_ringbuf_reserve(&rb, sizeof(struct event), 0);
+	if (!e)
+		return 0;
+	bpf_get_vma_id(vma, e->id);
+	e->addr = addr;
+	e->start = BPF_CORE_READ(vma, vm_start);
+	e->end = BPF_CORE_READ(vma, vm_end);
+	e->pteprot = pud & (unsigned long) 0xffff000000000fff;
+	e->vm_flags = vma->vm_flags;
+	e->ishuge = (pud & _PAGE_PSE > 0) ? 1 : 0;;
+	e->accessed = accessed;
+	e->index =  get_page_index_vma(addr, vma, true);
+	e->pte_level = 2;
 
 	bpf_ringbuf_submit(e, 0);
 	return 0;
